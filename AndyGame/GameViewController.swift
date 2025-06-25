@@ -212,7 +212,7 @@ class GameViewController: UIViewController {
         }
         
         // Randomize the initial board state
-        randomizeBoardState()
+        resetBoard()
 
         // set the scene to the view
         scnView.scene = scene
@@ -399,7 +399,7 @@ class GameViewController: UIViewController {
         resetButton.backgroundColor = UIColor.systemBlue
         resetButton.layer.cornerRadius = 8
         resetButton.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .medium)
-        resetButton.addTarget(self, action: #selector(randomizeBoardState), for: .touchUpInside)
+        resetButton.addTarget(self, action: #selector(resetBoard), for: .touchUpInside)
         
         // Add button to view
         view.addSubview(resetButton)
@@ -421,29 +421,73 @@ class GameViewController: UIViewController {
         resetButton.alpha = isRotating ? 0.5 : 1.0
     }
     
-    @objc private func randomizeBoardState() {
-        // Randomize all rotation states
+    @objc private func resetBoard() {
+        guard !isRotating else { return }
+        
+        // Disable interactions during reset
+        isRotating = true
+        
+        // Create array of all cells in diagonal order (top-right to bottom-left)
+        var diagonalCells: [CellPosition] = []
         for row in 0..<GRID_ROWS {
             for col in 0..<GRID_COLS {
-                // Generate random rotation state (0-3)
-                let randomState = Int.random(in: 0...3)
-                rotationStates[row][col] = randomState
-                
-                // Update visual rotation
-                if let cylinderNode = findCylinderNode(at: row, col: col) {
-                    let visualRotation = Float(randomState) * -Float.pi / 2 // 90 degrees per state
-                    cylinderNode.eulerAngles.y = visualRotation
-                    
-                    // Reset material color to blue
-                    if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
-                        material.diffuse.contents = UIColor.systemBlue
-                    }
-                }
+                diagonalCells.append(CellPosition(row: row, col: col))
             }
         }
         
-        // Clear any stored materials
-        originalMaterials.removeAll()
+        // Sort cells in diagonal order (top-right to bottom-left)
+        diagonalCells.sort { cell1, cell2 in
+            let sum1 = cell1.row + cell1.col
+            let sum2 = cell2.row + cell2.col
+            if sum1 == sum2 {
+                // If same diagonal, prioritize top-right (lower row, higher col)
+                return cell1.row < cell2.row
+            }
+            return sum1 > sum2 // Higher sum = closer to top-right
+        }
+        
+        let animationStagger = 0.005
+        
+        // Animate reset with staggered timing
+        for (index, cell) in diagonalCells.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * animationStagger) {
+                self.animateSingleCellReset(cell: cell, isLast: index == diagonalCells.count - 1)
+            }
+        }
+        
+        print("Board reset started with \(diagonalCells.count) cells")
+    }
+    
+    private func animateSingleCellReset(cell: CellPosition, isLast: Bool) {
+        // Reset rotation state to 0
+        let randomState = Int.random(in: 0...3)
+        rotationStates[cell.row][cell.col] = randomState
+        
+        // Find the cylinder node for this position
+        guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { return }
+        
+        // Animate the rotation back to 0
+        SCNTransaction.begin()
+        SCNTransaction.animationDuration = 0.3
+        
+        let visualRotation = Float(randomState) * -Float.pi / 2
+        cylinderNode.eulerAngles.y = visualRotation
+        
+        // Reset material color to blue
+        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+            material.diffuse.contents = UIColor.systemBlue
+        }
+        
+        SCNTransaction.commit()
+        
+        // If this is the last cell, re-enable interactions
+        if isLast {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.isRotating = false
+                self.updateResetButtonState()
+                print("Board reset complete")
+            }
+        }
     }
     
     override var prefersStatusBarHidden: Bool {
