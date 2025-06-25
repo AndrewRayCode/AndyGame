@@ -42,8 +42,12 @@ let RotationNeighbors: [ROTATION: [NEIGHBOR]] = [
 
 class GameViewController: UIViewController {
     
-    // 2D array to store rotation states for each cylinder (12x8 grid)
-    var rotationStates: [[Int]] = Array(repeating: Array(repeating: 0, count: 12), count: 8)
+    // Grid dimensions
+    private let GRID_ROWS = 12
+    private let GRID_COLS = 8
+    
+    // 2D array to store rotation states for each cylinder
+    var rotationStates: [[Int]] = []
     
     // Dictionary to map cylinder nodes to their grid positions
     var cylinderNodes: [SCNNode: CellPosition] = [:]
@@ -53,9 +57,15 @@ class GameViewController: UIViewController {
     
     // Store original materials to restore after rotation
     var originalMaterials: [SCNNode: SCNMaterial] = [:]
+    
+    // Reset button
+    private var resetButton: UIButton!
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        
+        // Initialize rotation states array
+        rotationStates = Array(repeating: Array(repeating: 0, count: GRID_COLS), count: GRID_ROWS)
         
         // create a new scene
         let scene = SCNScene()
@@ -85,13 +95,13 @@ class GameViewController: UIViewController {
         ambientLightNode.light!.color = UIColor.lightGray
         scene.rootNode.addChildNode(ambientLightNode)
         
-        // Create cylinder array: 12 columns (x-axis) by 8 rows (z-axis)
+        // Create cylinder array: GRID_COLS columns (x-axis) by GRID_ROWS rows (z-axis)
         let cylinderRadius: Float = 0.5
         let cylinderHeight: Float = 0.2
         let spacing: Float = 1.1 // Increased spacing for better visibility
 
-        for row in 0..<8 {
-            for col in 0..<12 {
+        for row in 0..<GRID_ROWS {
+            for col in 0..<GRID_COLS {
                 // Create cylinder geometry
                 let cylinderGeometry = SCNCylinder(radius: CGFloat(cylinderRadius), height: CGFloat(cylinderHeight))
                 
@@ -107,8 +117,8 @@ class GameViewController: UIViewController {
                 
                 // Position cylinders in a grid
                 // Center the grid around origin
-                let startX = Float(-(12 - 1)) * spacing / 2
-                let startZ = Float(-(8 - 1)) * spacing / 2
+                let startX = Float(-(GRID_COLS - 1)) * spacing / 2
+                let startZ = Float(-(GRID_ROWS - 1)) * spacing / 2
                 
                 let xPos = startX + Float(col) * spacing
                 let zPos = startZ + Float(row) * spacing
@@ -160,7 +170,10 @@ class GameViewController: UIViewController {
                 cylinderNode.addChildNode(horizontalLNode)
             }
         }
-
+        
+        // Randomize the initial board state
+        randomizeBoardState()
+        
         // retrieve the SCNView
         let scnView = self.view as! SCNView
         
@@ -179,6 +192,9 @@ class GameViewController: UIViewController {
         // add a tap gesture recognizer
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         scnView.addGestureRecognizer(tapGesture)
+        
+        // Create and setup reset button
+        setupResetButton()
         
         print("Scene setup complete. Total nodes in scene: \(scene.rootNode.childNodes.count)")
     }
@@ -221,6 +237,7 @@ class GameViewController: UIViewController {
     private func rotateCells(_ cells: [CellPosition]) {
         // Set rotating flag to prevent other taps
         isRotating = true
+        updateResetButtonState()
         
         // Process each cell in the array
         for cell in cells {
@@ -319,17 +336,6 @@ class GameViewController: UIViewController {
                 newNeighborsToRotate.append(cell)
                 newNeighborsToRotate.append(contentsOf: neighbors)
             }
-
-            for neighbor in neighbors {
-                // Find the cylinder node for this position
-                guard let cylinderNode = findCylinderNode(at: neighbor.row, col: neighbor.col) else { continue }
-                
-                // Store original material and change to green during rotation
-                if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
-                    originalMaterials[cylinderNode] = material.copy() as? SCNMaterial
-                    material.diffuse.contents = UIColor.green
-                }
-            }
         }
         
         // Deduplicate newNeighborsToRotate efficiently using a Set
@@ -342,7 +348,88 @@ class GameViewController: UIViewController {
             print("No more rotations")
             isRotating = false
             originalMaterials.removeAll()
+            updateResetButtonState()
         }
+    }
+    
+    private func setupResetButton() {
+        resetButton = UIButton(type: .system)
+        resetButton.setTitle("Reset Board", for: .normal)
+        resetButton.setTitleColor(.white, for: .normal)
+        resetButton.backgroundColor = UIColor.systemBlue
+        resetButton.layer.cornerRadius = 8
+        resetButton.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .medium)
+        resetButton.addTarget(self, action: #selector(resetBoard), for: .touchUpInside)
+        
+        // Add button to view
+        view.addSubview(resetButton)
+        
+        // Setup constraints
+        resetButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            resetButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
+            resetButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            resetButton.widthAnchor.constraint(equalToConstant: 120),
+            resetButton.heightAnchor.constraint(equalToConstant: 44)
+        ])
+        
+        updateResetButtonState()
+    }
+    
+    private func updateResetButtonState() {
+        resetButton.isEnabled = !isRotating
+        resetButton.alpha = isRotating ? 0.5 : 1.0
+    }
+    
+    @objc private func resetBoard() {
+        guard !isRotating else { return }
+        
+        // Reset all rotation states to 0
+        for row in 0..<GRID_ROWS {
+            for col in 0..<GRID_COLS {
+                rotationStates[row][col] = 0
+                
+                // Update visual rotation
+                if let cylinderNode = findCylinderNode(at: row, col: col) {
+                    cylinderNode.eulerAngles.y = 0
+                    
+                    // Reset material color to blue
+                    if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+                        material.diffuse.contents = UIColor.systemBlue
+                    }
+                }
+            }
+        }
+        
+        // Clear any stored materials
+        originalMaterials.removeAll()
+        
+        print("Board reset")
+    }
+    
+    private func randomizeBoardState() {
+        // Randomize all rotation states
+        for row in 0..<GRID_ROWS {
+            for col in 0..<GRID_COLS {
+                // Generate random rotation state (0-3)
+                let randomState = Int.random(in: 0...3)
+                rotationStates[row][col] = randomState
+                
+                // Update visual rotation
+                if let cylinderNode = findCylinderNode(at: row, col: col) {
+                    let visualRotation = Float(randomState) * -Float.pi / 2 // 90 degrees per state
+                    cylinderNode.eulerAngles.y = visualRotation
+                    
+                    // Reset material color to blue
+                    if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+                        material.diffuse.contents = UIColor.systemBlue
+                    }
+                }
+            }
+        }
+        
+        // Clear any stored materials
+        originalMaterials.removeAll()
     }
     
     override var prefersStatusBarHidden: Bool {
