@@ -9,7 +9,50 @@ import UIKit
 import QuartzCore
 import SceneKit
 
+enum ROTATION: Int {
+    case zero = 0
+    case one = 1
+    case two = 2
+    case three = 3
+}
+
+struct CellPosition: Hashable {
+    let row: Int
+    let col: Int
+}
+
+typealias NEIGHBOR = (Int, Int)
+
+let UP: NEIGHBOR = (0, -1)
+let DOWN: NEIGHBOR = (0, 1)
+let LEFT: NEIGHBOR = (-1, 0)
+let RIGHT: NEIGHBOR = (1, 0)
+
+// Matrix neighbor targeting [+-x, +-y]
+let RotationNeighbors: [ROTATION: [NEIGHBOR]] = [
+    // └ up right
+    .zero: [UP, RIGHT],
+    // ┌ right down
+    .one: [RIGHT, DOWN],
+    // ┐ left down
+    .two: [LEFT, DOWN],
+    // ┘ up left
+    .three: [UP, LEFT],
+]
+
 class GameViewController: UIViewController {
+    
+    // 2D array to store rotation states for each cylinder (12x8 grid)
+    var rotationStates: [[Int]] = Array(repeating: Array(repeating: 0, count: 12), count: 8)
+    
+    // Dictionary to map cylinder nodes to their grid positions
+    var cylinderNodes: [SCNNode: CellPosition] = [:]
+    
+    // Flag to track if any cylinder is currently rotating
+    var isRotating = false
+    
+    // Store original materials to restore after rotation
+    var originalMaterials: [SCNNode: SCNMaterial] = [:]
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -45,10 +88,8 @@ class GameViewController: UIViewController {
         // Create cylinder array: 12 columns (x-axis) by 8 rows (z-axis)
         let cylinderRadius: Float = 0.5
         let cylinderHeight: Float = 0.2
-        let spacing: Float = 1.5 // Increased spacing for better visibility
-        
-        print("Creating cylinder array: 12x8")
-        
+        let spacing: Float = 1.1 // Increased spacing for better visibility
+
         for row in 0..<8 {
             for col in 0..<12 {
                 // Create cylinder geometry
@@ -80,6 +121,9 @@ class GameViewController: UIViewController {
                 
                 // Add to scene
                 scene.rootNode.addChildNode(cylinderNode)
+                
+                // Store mapping between cylinder node and its grid position
+                cylinderNodes[cylinderNode] = CellPosition(row: row, col: col)
                 
                 // Add "L" shape on top of the cylinder
                 let lThickness: Float = 0.05
@@ -141,6 +185,11 @@ class GameViewController: UIViewController {
     
     @objc
     func handleTap(_ gestureRecognize: UIGestureRecognizer) {
+        // Check if any cylinder is currently rotating
+        if isRotating {
+            return
+        }
+        
         // retrieve the SCNView
         let scnView = self.view as! SCNView
         
@@ -152,26 +201,147 @@ class GameViewController: UIViewController {
             // retrieved the first clicked object
             let result = hitResults[0]
             
-            // get its material
-            let material = result.node.geometry!.firstMaterial!
+            // Find the main cylinder node (either the tapped node itself or its parent)
+            var cylinderNode = result.node
+            while cylinderNode.parent != nil && cylinderNode.parent != scnView.scene?.rootNode {
+                cylinderNode = cylinderNode.parent!
+            }
             
-            // highlight it
+            // Get the grid position for this cylinder
+            guard let position = cylinderNodes[cylinderNode] else { return }
+            
+            // Rotate the clicked cell
+            rotateCells([position])
+        }
+    }
+
+    // On initial tap, this rotates the first cell.
+    // On subsequent rotation completions, this function is called with the
+    // *finished* rotations   
+    private func rotateCells(_ cells: [CellPosition]) {
+        // Set rotating flag to prevent other taps
+        isRotating = true
+        
+        // Process each cell in the array
+        for cell in cells {
+            // Increment rotation state (unbounded)
+            rotationStates[cell.row][cell.col] += 1
+            
+            // Calculate visual rotation based on state
+            let rotationState = rotationStates[cell.row][cell.col]
+            let visualRotation = Float(rotationState) * -Float.pi / 2 // 90 degrees per state
+            
+            // Find the cylinder node for this position
+            guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { continue }
+            
+            // Store original material and change to pink during rotation
+            if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+                originalMaterials[cylinderNode] = material.copy() as? SCNMaterial
+                material.diffuse.contents = UIColor.systemPink
+            }
+            
+            // Animate the rotation
             SCNTransaction.begin()
             SCNTransaction.animationDuration = 0.5
             
-            // on completion - unhighlight
-            SCNTransaction.completionBlock = {
-                SCNTransaction.begin()
-                SCNTransaction.animationDuration = 0.5
-                
-                material.emission.contents = UIColor.black
-                
-                SCNTransaction.commit()
-            }
-            
-            material.emission.contents = UIColor.red
+            cylinderNode.eulerAngles.y = visualRotation
             
             SCNTransaction.commit()
+            
+            print("Cylinder at (\(cell.row), \(cell.col)) rotated to state: \(rotationState)")
+        }
+        
+        // Set up a single completion block for the entire batch
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.onRotationComplete(rotatedCells: cells)
+        }
+    }
+    
+    private func findCylinderNode(at row: Int, col: Int) -> SCNNode? {
+        let position = CellPosition(row: row, col: col)
+        for (node, nodePosition) in cylinderNodes {
+            if nodePosition == position {
+                return node
+            }
+        }
+        return nil
+    }
+    
+    private func findConnectedNeighbors(
+        x: Int,
+        y: Int,
+        rotation: ROTATION,
+        currentRotations: [[Int]]
+    ) -> [CellPosition] {
+        var neighborsToRotate: [CellPosition] = []
+        
+        // Check each direction from this pipe
+        for (dx, dy) in RotationNeighbors[rotation] ?? [] {
+            let nx = x + dx
+            let ny = y + dy
+            
+            // Check if neighbor exists on the board
+            guard ny >= 0 && ny < currentRotations.count && 
+                  nx >= 0 && nx < currentRotations[ny].count else { continue }
+            
+            let neighborUnbounded = currentRotations[ny][nx]
+            let neighbor = ROTATION(rawValue: neighborUnbounded % 4) ?? .zero
+            
+            // Then make sure the neighbor points back at us
+            let neighborPointsAtUsToo = (RotationNeighbors[neighbor] ?? []).contains { (ndx, ndy) in
+                let points = nx + ndx == x && ny + ndy == y
+                return points
+            }
+            
+            if neighborPointsAtUsToo {
+                neighborsToRotate.append(CellPosition(row: ny, col: nx))
+            }
+        }
+        
+        return neighborsToRotate
+    }
+    
+    private func onRotationComplete(rotatedCells: [CellPosition]) {
+        // Restore original materials
+        for (node, originalMaterial) in originalMaterials {
+            if let geometry = node.geometry, let material = geometry.firstMaterial {
+                material.diffuse.contents = originalMaterial.diffuse.contents
+            }
+        }
+        
+        var newNeighborsToRotate: [CellPosition] = []
+        // Find connected neighbors for each rotated cell
+        for cell in rotatedCells {
+            let currentRotation = ROTATION(rawValue: rotationStates[cell.row][cell.col] % 4) ?? .zero
+            let neighbors = findConnectedNeighbors(x: cell.col, y: cell.row, rotation: currentRotation, currentRotations: rotationStates)
+
+            if neighbors.count > 0 {
+                newNeighborsToRotate.append(cell)
+                newNeighborsToRotate.append(contentsOf: neighbors)
+            }
+
+            for neighbor in neighbors {
+                // Find the cylinder node for this position
+                guard let cylinderNode = findCylinderNode(at: neighbor.row, col: neighbor.col) else { continue }
+                
+                // Store original material and change to green during rotation
+                if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+                    originalMaterials[cylinderNode] = material.copy() as? SCNMaterial
+                    material.diffuse.contents = UIColor.green
+                }
+            }
+        }
+        
+        // Deduplicate newNeighborsToRotate efficiently using a Set
+        let uniqueNeighbors = Array(Set(newNeighborsToRotate))
+        
+        if uniqueNeighbors.count > 0 {
+            print("Rotating neighbors: \(uniqueNeighbors)")
+            rotateCells(uniqueNeighbors)
+        } else {
+            print("No more rotations")
+            isRotating = false
+            originalMaterials.removeAll()
         }
     }
     
