@@ -43,8 +43,15 @@ let RotationNeighbors: [ROTATION: [NEIGHBOR]] = [
 class GameViewController: UIViewController {
     
     // Grid dimensions
-    private let GRID_ROWS = 12
+    // vertical axis
+    private let GRID_ROWS = 10
+    // horizontal axis
     private let GRID_COLS = 8
+    private let GRID_SPACING = 1.1
+    
+    private let GRID_PADDING: Float = 1.0 // Padding around the grid in world units
+    
+    private let CAMERA_DISTANCE: Float = 10.0
     
     // 2D array to store rotation states for each cylinder
     var rotationStates: [[Int]] = []
@@ -60,6 +67,12 @@ class GameViewController: UIViewController {
     
     // Reset button
     private var resetButton: UIButton!
+    
+    // Camera node reference
+    private var cameraNode: SCNNode!
+    
+    var scene: SCNScene!
+    var gridGroupNode: SCNNode!
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -68,22 +81,50 @@ class GameViewController: UIViewController {
         rotationStates = Array(repeating: Array(repeating: 0, count: GRID_COLS), count: GRID_ROWS)
         
         // create a new scene
-        let scene = SCNScene()
+        scene = SCNScene()
         
         // create and add a camera to the scene
         let cameraNode = SCNNode()
         cameraNode.camera = SCNCamera()
         scene.rootNode.addChildNode(cameraNode)
+        self.cameraNode = cameraNode
         
-        // place the camera for top-down view - closer to see the cylinders
-        cameraNode.position = SCNVector3(x: 0, y: 15, z: 0)
-        cameraNode.eulerAngles = SCNVector3(x: -Float.pi/2, y: 0, z: 0) // Look down
+        // Create a parent group node for the entire grid
+        gridGroupNode = SCNNode()
+        gridGroupNode.name = "GridGroup"
+        scene.rootNode.addChildNode(gridGroupNode)
+        
+        // Calculate grid dimensions in world space
+        let gridWidth = Float(GRID_COLS) * Float(GRID_SPACING)
+        let gridHeight = Float(GRID_ROWS) * Float(GRID_SPACING)
+        let scnView = self.view as! SCNView
+        let cameraAspect = Float(scnView.bounds.width / scnView.bounds.height)
+        
+        // Calculate camera view frustum dimensions
+        let cameraFOV = Float(cameraNode.camera!.fieldOfView)
+
+        let frustumHeight = 2.0 * CAMERA_DISTANCE * tan(0.5 * cameraFOV * Float.pi / Float(180.0))
+        let frustumWidth = frustumHeight * cameraAspect
+        
+        // if the grid width is at 90, and we need to get it to 10 (frustum width)
+        let scale = min(
+            frustumWidth / (gridWidth + GRID_PADDING * 2), 
+            frustumHeight / (gridHeight + GRID_PADDING * 2) 
+        )
+        gridGroupNode.scale = SCNVector3(x: scale, y: scale, z: scale)
+
+        // Place the camera for top-down view - directly above the grid center
+        cameraNode.position = SCNVector3(x: 0, y: CAMERA_DISTANCE, z: 0)
+        cameraNode.eulerAngles = SCNVector3(x: -Float.pi/2, y: 0, z: 0) // Look straight down
+        
+        // Scale the grid to fit the screen
+        updateGridScale()
         
         // create and add a light to the scene - brighter and closer
         let lightNode = SCNNode()
         lightNode.light = SCNLight()
         lightNode.light!.type = .omni
-        lightNode.light!.intensity = 1000 // Brighter light
+        lightNode.light!.intensity = 1 // Brighter light
         lightNode.position = SCNVector3(x: 0, y: 10, z: 0)
         scene.rootNode.addChildNode(lightNode)
         
@@ -91,14 +132,13 @@ class GameViewController: UIViewController {
         let ambientLightNode = SCNNode()
         ambientLightNode.light = SCNLight()
         ambientLightNode.light!.type = .ambient
-        ambientLightNode.light!.intensity = 500 // Brighter ambient light
+        ambientLightNode.light!.intensity = 2000 // Brighter ambient light
         ambientLightNode.light!.color = UIColor.lightGray
         scene.rootNode.addChildNode(ambientLightNode)
         
         // Create cylinder array: GRID_COLS columns (x-axis) by GRID_ROWS rows (z-axis)
         let cylinderRadius: Float = 0.5
         let cylinderHeight: Float = 0.2
-        let spacing: Float = 1.1 // Increased spacing for better visibility
 
         for row in 0..<GRID_ROWS {
             for col in 0..<GRID_COLS {
@@ -117,11 +157,11 @@ class GameViewController: UIViewController {
                 
                 // Position cylinders in a grid
                 // Center the grid around origin
-                let startX = Float(-(GRID_COLS - 1)) * spacing / 2
-                let startZ = Float(-(GRID_ROWS - 1)) * spacing / 2
+                let startX = Float(-(GRID_COLS - 1)) * Float(GRID_SPACING) / 2
+                let startZ = Float(-(GRID_ROWS - 1)) * Float(GRID_SPACING) / 2
                 
-                let xPos = startX + Float(col) * spacing
-                let zPos = startZ + Float(row) * spacing
+                let xPos = startX + Float(col) * Float(GRID_SPACING)
+                let zPos = startZ + Float(row) * Float(GRID_SPACING)
                 
                 cylinderNode.position = SCNVector3(
                     x: xPos,
@@ -130,7 +170,7 @@ class GameViewController: UIViewController {
                 )
                 
                 // Add to scene
-                scene.rootNode.addChildNode(cylinderNode)
+                gridGroupNode.addChildNode(cylinderNode)
                 
                 // Store mapping between cylinder node and its grid position
                 cylinderNodes[cylinderNode] = CellPosition(row: row, col: col)
@@ -148,7 +188,7 @@ class GameViewController: UIViewController {
                 let verticalLNode = SCNNode(geometry: verticalLGeometry)
                 verticalLNode.position = SCNVector3(
                     x: 0,
-                    y: cylinderHeight + lLength/2,
+                    y: cylinderHeight / 2,
                     z: -lLength/2
                 )
                 verticalLNode.eulerAngles = SCNVector3(x: -Float.pi / 2, y: 0, z: 0) // Rotate to be horizontal
@@ -163,7 +203,7 @@ class GameViewController: UIViewController {
                 let horizontalLNode = SCNNode(geometry: horizontalLGeometry)
                 horizontalLNode.position = SCNVector3(
                     x: lLength/2,
-                    y: cylinderHeight + lLength/2,
+                    y: cylinderHeight / 2,
                     z: 0
                 )
                 horizontalLNode.eulerAngles = SCNVector3(x: Float.pi/2, y: Float.pi/2, z: 0)
@@ -173,21 +213,18 @@ class GameViewController: UIViewController {
         
         // Randomize the initial board state
         randomizeBoardState()
-        
-        // retrieve the SCNView
-        let scnView = self.view as! SCNView
-        
+
         // set the scene to the view
         scnView.scene = scene
         
         // allows the user to manipulate the camera
-        scnView.allowsCameraControl = true
+        scnView.allowsCameraControl = false
         
         // show statistics such as fps and timing information
         scnView.showsStatistics = true
         
         // configure the view
-        scnView.backgroundColor = UIColor.black
+        scnView.backgroundColor = UIColor.white
         
         // add a tap gesture recognizer
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
@@ -201,6 +238,7 @@ class GameViewController: UIViewController {
     
     @objc
     func handleTap(_ gestureRecognize: UIGestureRecognizer) {
+        print("handleTap \(isRotating)")
         // Check if any cylinder is currently rotating
         if isRotating {
             return
@@ -212,6 +250,7 @@ class GameViewController: UIViewController {
         // check what nodes are tapped
         let p = gestureRecognize.location(in: scnView)
         let hitResults = scnView.hitTest(p, options: [:])
+
         // check that we clicked on at least one object
         if hitResults.count > 0 {
             // retrieved the first clicked object
@@ -219,7 +258,8 @@ class GameViewController: UIViewController {
             
             // Find the main cylinder node (either the tapped node itself or its parent)
             var cylinderNode = result.node
-            while cylinderNode.parent != nil && cylinderNode.parent != scnView.scene?.rootNode {
+            while cylinderNode.parent != nil && cylinderNode.parent != scnView.scene?.rootNode 
+                && cylinderNode.parent != gridGroupNode {
                 cylinderNode = cylinderNode.parent!
             }
             
@@ -359,7 +399,7 @@ class GameViewController: UIViewController {
         resetButton.backgroundColor = UIColor.systemBlue
         resetButton.layer.cornerRadius = 8
         resetButton.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .medium)
-        resetButton.addTarget(self, action: #selector(resetBoard), for: .touchUpInside)
+        resetButton.addTarget(self, action: #selector(randomizeBoardState), for: .touchUpInside)
         
         // Add button to view
         view.addSubview(resetButton)
@@ -381,33 +421,7 @@ class GameViewController: UIViewController {
         resetButton.alpha = isRotating ? 0.5 : 1.0
     }
     
-    @objc private func resetBoard() {
-        guard !isRotating else { return }
-        
-        // Reset all rotation states to 0
-        for row in 0..<GRID_ROWS {
-            for col in 0..<GRID_COLS {
-                rotationStates[row][col] = 0
-                
-                // Update visual rotation
-                if let cylinderNode = findCylinderNode(at: row, col: col) {
-                    cylinderNode.eulerAngles.y = 0
-                    
-                    // Reset material color to blue
-                    if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
-                        material.diffuse.contents = UIColor.systemBlue
-                    }
-                }
-            }
-        }
-        
-        // Clear any stored materials
-        originalMaterials.removeAll()
-        
-        print("Board reset")
-    }
-    
-    private func randomizeBoardState() {
+    @objc private func randomizeBoardState() {
         // Randomize all rotation states
         for row in 0..<GRID_ROWS {
             for col in 0..<GRID_COLS {
@@ -442,6 +456,49 @@ class GameViewController: UIViewController {
         } else {
             return .all
         }
+    }
+
+    private func updateGridScale() {
+        guard let gridGroupNode = scene?.rootNode.childNode(withName: "GridGroup", recursively: true) else { return }
+        
+        // Calculate grid dimensions in world space
+        let gridWidth = Float(GRID_COLS) * Float(GRID_SPACING)
+        let gridHeight = Float(GRID_ROWS) * Float(GRID_SPACING)
+        
+        // Get current screen dimensions
+        let scnView = self.view as! SCNView
+        let cameraAspect = Float(scnView.bounds.width / scnView.bounds.height)
+        
+        // Calculate camera view frustum dimensions
+        let cameraFOV = Float(cameraNode.camera!.fieldOfView)
+        let frustumHeight = 2.0 * CAMERA_DISTANCE * tan(0.5 * cameraFOV * Float.pi / Float(180.0))
+        let frustumWidth = frustumHeight * cameraAspect
+        
+        // Calculate scale to fit grid within frustum
+        let scale = min(
+            frustumWidth / (gridWidth + GRID_PADDING * 2), 
+            frustumHeight / (gridHeight + GRID_PADDING * 2) 
+        )
+        
+        gridGroupNode.scale = SCNVector3(x: scale, y: scale, z: scale)
+        
+        print("Grid scaled to: \(scale) for screen aspect: \(cameraAspect)")
+    }
+    
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        
+        coordinator.animate(alongsideTransition: { _ in
+            // Update grid scale when orientation changes
+            self.updateGridScale()
+        }, completion: nil)
+    }
+    
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        
+        // Update grid scale when view layout changes (e.g., safe area changes)
+        updateGridScale()
     }
 
 }
