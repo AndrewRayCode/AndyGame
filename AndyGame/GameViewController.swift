@@ -8,6 +8,7 @@
 import UIKit
 import QuartzCore
 import SceneKit
+import GLTFSceneKit
 
 enum ROTATION: Int {
     case zero = 0
@@ -40,6 +41,17 @@ let RotationNeighbors: [ROTATION: [NEIGHBOR]] = [
     .three: [UP, LEFT],
 ]
 
+func loadGLB(named filename: String) -> SCNScene? {
+    do {
+        let sceneSource = try GLTFSceneSource(named: filename)
+        let scene = try sceneSource.scene()
+        return scene
+    } catch {
+        print("Error loading GLB file: \(error.localizedDescription)")
+        return nil
+    }
+}
+
 class GameViewController: UIViewController {
     
     // Grid dimensions
@@ -52,6 +64,9 @@ class GameViewController: UIViewController {
     private let GRID_PADDING: Float = 1.0 // Padding around the grid in world units
     
     private let CAMERA_DISTANCE: Float = 10.0
+    
+    private let cylinderRadius: Float = 0.5
+    private let cylinderHeight: Float = 0.5
     
     // 2D array to store rotation states for each cylinder
     var rotationStates: [[Int]] = []
@@ -121,24 +136,37 @@ class GameViewController: UIViewController {
         updateGridScale()
         
         // create and add a light to the scene - brighter and closer
-        let lightNode = SCNNode()
-        lightNode.light = SCNLight()
-        lightNode.light!.type = .omni
-        lightNode.light!.intensity = 1 // Brighter light
-        lightNode.position = SCNVector3(x: 0, y: 10, z: 0)
-        scene.rootNode.addChildNode(lightNode)
+//        let lightNode = SCNNode()
+//        lightNode.light = SCNLight()
+//        lightNode.light!.type = .omni
+//        lightNode.light!.intensity = 100 // Brighter light
+//        lightNode.position = SCNVector3(x: -3, y: 20, z: -3)
+//        scene.rootNode.addChildNode(lightNode)
         
         // create and add an ambient light to the scene - brighter
         let ambientLightNode = SCNNode()
         ambientLightNode.light = SCNLight()
         ambientLightNode.light!.type = .ambient
-        ambientLightNode.light!.intensity = 2000 // Brighter ambient light
+        ambientLightNode.light!.intensity = 1000 // Brighter ambient light
         ambientLightNode.light!.color = UIColor.lightGray
         scene.rootNode.addChildNode(ambientLightNode)
+
+        // Load the pipe model
+        var pipeScene: SCNScene
+        do {
+          let sceneSource = try GLTFSceneSource(named: "art.scnassets/Pipe.glb")
+            pipeScene = try sceneSource.scene()
+        } catch {
+          print("\(error.localizedDescription)")
+          return
+        }
+
         
-        // Create cylinder array: GRID_COLS columns (x-axis) by GRID_ROWS rows (z-axis)
-        let cylinderRadius: Float = 0.5
-        let cylinderHeight: Float = 0.2
+        // Get the pipe node from the loaded scene
+        guard let pipeNode = pipeScene.rootNode.childNodes.first else {
+            print("Error: No nodes found in Pipe.glb")
+            return
+        }
 
         for row in 0..<GRID_ROWS {
             for col in 0..<GRID_COLS {
@@ -150,6 +178,7 @@ class GameViewController: UIViewController {
                 material.diffuse.contents = UIColor.systemBlue
                 material.specular.contents = UIColor.white
                 material.lightingModel = .physicallyBased
+                material.shininess = 1000
                 cylinderGeometry.materials = [material]
                 
                 // Create cylinder node
@@ -174,40 +203,17 @@ class GameViewController: UIViewController {
                 
                 // Store mapping between cylinder node and its grid position
                 cylinderNodes[cylinderNode] = CellPosition(row: row, col: col)
-                
-                // Add "L" shape on top of the cylinder
-                let lThickness: Float = 0.05
-                let lLength: Float = 0.45
-                
-                // Vertical part of "L" (along z-axis)
-                let verticalLGeometry = SCNCylinder(radius: CGFloat(lThickness), height: CGFloat(lLength))
-                let verticalLMaterial = SCNMaterial()
-                verticalLMaterial.diffuse.contents = UIColor.orange
-                verticalLGeometry.materials = [verticalLMaterial]
-                
-                let verticalLNode = SCNNode(geometry: verticalLGeometry)
-                verticalLNode.position = SCNVector3(
+
+                let childPipe = pipeNode.clone()
+                childPipe.position = SCNVector3(
                     x: 0,
-                    y: cylinderHeight / 2,
-                    z: -lLength/2
-                )
-                verticalLNode.eulerAngles = SCNVector3(x: -Float.pi / 2, y: 0, z: 0) // Rotate to be horizontal
-                cylinderNode.addChildNode(verticalLNode)
-                
-                // Horizontal part of "L" (along x-axis)
-                let horizontalLGeometry = SCNCylinder(radius: CGFloat(lThickness), height: CGFloat(lLength))
-                let horizontalLMaterial = SCNMaterial()
-                horizontalLMaterial.diffuse.contents = UIColor.orange
-                horizontalLGeometry.materials = [horizontalLMaterial]
-                
-                let horizontalLNode = SCNNode(geometry: horizontalLGeometry)
-                horizontalLNode.position = SCNVector3(
-                    x: lLength/2,
                     y: cylinderHeight / 2,
                     z: 0
                 )
-                horizontalLNode.eulerAngles = SCNVector3(x: Float.pi/2, y: Float.pi/2, z: 0)
-                cylinderNode.addChildNode(horizontalLNode)
+                let childPipeScale = Float(0.25)
+                childPipe.scale = SCNVector3(x: childPipeScale, y: childPipeScale, z: childPipeScale)
+                childPipe.eulerAngles = SCNVector3(x: Float.pi / 2, y: 0, z: 0)
+                cylinderNode.addChildNode(childPipe)
             }
         }
         
@@ -224,7 +230,7 @@ class GameViewController: UIViewController {
         scnView.showsStatistics = true
         
         // configure the view
-        scnView.backgroundColor = UIColor.white
+        scnView.backgroundColor = UIColor.black
         
         // add a tap gesture recognizer
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))

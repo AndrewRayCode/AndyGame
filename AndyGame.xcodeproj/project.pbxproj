@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		15412CD82E0BC5460019444B /* GLTFSceneKit in Frameworks */ = {isa = PBXBuildFile; productRef = 15412CD72E0BC5460019444B /* GLTFSceneKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		153CAFDD2E07AC0D0017C066 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +56,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				15412CD82E0BC5460019444B /* GLTFSceneKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +117,7 @@
 			);
 			name = AndyGame;
 			packageProductDependencies = (
+				15412CD72E0BC5460019444B /* GLTFSceneKit */,
 			);
 			productName = AndyGame;
 			productReference = 153CAFC72E07AC0C0017C066 /* AndyGame.app */;
@@ -195,6 +201,9 @@
 			);
 			mainGroup = 153CAFBE2E07AC0C0017C066;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				15412CD62E0BC5460019444B /* XCRemoteSwiftPackageReference "GLTFSceneKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 153CAFC82E07AC0C0017C066 /* Products */;
 			projectDirPath = "";
@@ -550,6 +559,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		15412CD62E0BC5460019444B /* XCRemoteSwiftPackageReference "GLTFSceneKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/magicien/GLTFSceneKit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.4.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		15412CD72E0BC5460019444B /* GLTFSceneKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 15412CD62E0BC5460019444B /* XCRemoteSwiftPackageReference "GLTFSceneKit" */;
+			productName = GLTFSceneKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 153CAFBF2E07AC0C0017C066 /* Project object */;
 }
