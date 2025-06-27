@@ -71,9 +71,9 @@ class GameViewController: UIViewController {
     
     // Grid dimensions
     // vertical axis
-    private let GRID_ROWS = 10
+    private let GRID_ROWS = 12
     // horizontal axis
-    private let GRID_COLS = 8
+    private let GRID_COLS = 10
     private let GRID_SPACING = 1.1
     
     private let GRID_PADDING: Float = 1.0 // Padding around the grid in world units
@@ -325,6 +325,10 @@ class GameViewController: UIViewController {
         isRotating = true
         updateResetButtonState()
         
+        // Track completion of all animations
+        var completedAnimations = 0
+        let totalAnimations = cells.count
+        
         // Process each cell in the array
         for cell in cells {
             // Update rotation state (unbounded)
@@ -338,7 +342,13 @@ class GameViewController: UIViewController {
             let visualRotation = Float(rotationState) * -Float.pi / 2
             
             // Find the cylinder node for this position
-            guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { continue }
+            guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { 
+                completedAnimations += 1
+                if completedAnimations == totalAnimations {
+                    onRotationComplete(rotatedCells: cells)
+                }
+                continue 
+            }
             
             // Store original material and change to pink during rotation
             if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
@@ -346,18 +356,22 @@ class GameViewController: UIViewController {
                 material.diffuse.contents = UIColor.systemPink
             }
             
-            // Animate the rotation
+            // Create springy rotation animation using SCNTransaction with completion
             SCNTransaction.begin()
             SCNTransaction.animationDuration = 0.5
+            SCNTransaction.animationTimingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0)
+            
+            // Set the completion block to track when this animation finishes
+            SCNTransaction.completionBlock = {
+                completedAnimations += 1
+                if completedAnimations == totalAnimations {
+                    self.onRotationComplete(rotatedCells: cells)
+                }
+            }
             
             cylinderNode.eulerAngles.y = visualRotation
             
             SCNTransaction.commit()
-        }
-        
-        // Set up a single completion block for the entire batch
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.onRotationComplete(rotatedCells: cells)
         }
     }
     
@@ -511,28 +525,52 @@ class GameViewController: UIViewController {
             return sum1 > sum2 // Higher sum = closer to top-right
         }
         
+        // Track completion of all reset animations
+        var completedAnimations = 0
+        let totalAnimations = diagonalCells.count
         let animationStagger = 0.005
         
         // Animate reset with staggered timing
         for (index, cell) in diagonalCells.enumerated() {
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * animationStagger) {
-                self.animateSingleCellReset(cell: cell, isLast: index == diagonalCells.count - 1)
+                self.animateSingleCellReset(
+                    cell: cell, 
+                    completion: {
+                        completedAnimations += 1
+                        if completedAnimations == totalAnimations {
+                            self.isRotating = false
+                            self.updateResetButtonState()
+                        }
+                    }
+                )
             }
         }
     }
     
-    private func animateSingleCellReset(cell: CellPosition, isLast: Bool) {
+    private func animateSingleCellReset(cell: CellPosition, completion: @escaping () -> Void) {
         // Randomise rotation stat
         let randomState = Int.random(in: 0...3)
-        rotationStates[cell.row][cell.col] = randomState
+        rotationStates[cell.row][cell.col] += randomState
+        let rotation = rotationStates[cell.row][cell.col]
         
         // Find the cylinder node for this position
-        guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { return }
+        guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { 
+            completion()
+            return 
+        }
         
+        let visualRotation = Float(rotation) * -Float.pi / 2
+        
+        // Use springy animation for reset as well
         SCNTransaction.begin()
-        SCNTransaction.animationDuration = 0.3
+        SCNTransaction.animationDuration = 0.5
+        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0)
         
-        let visualRotation = Float(randomState) * -Float.pi / 2
+        // Set the completion block
+        SCNTransaction.completionBlock = {
+            completion()
+        }
+        
         cylinderNode.eulerAngles.y = visualRotation
         
         // Reset material color
@@ -541,14 +579,6 @@ class GameViewController: UIViewController {
         }
         
         SCNTransaction.commit()
-        
-        // If this is the last cell, re-enable interactions
-        if isLast {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                self.isRotating = false
-                self.updateResetButtonState()
-            }
-        }
     }
     
     
