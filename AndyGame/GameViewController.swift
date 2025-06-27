@@ -71,9 +71,9 @@ class GameViewController: UIViewController {
     
     // Grid dimensions
     // vertical axis
-    private let GRID_ROWS = 8
+    private let GRID_ROWS = 10
     // horizontal axis
-    private let GRID_COLS = 6
+    private let GRID_COLS = 8
     private let GRID_SPACING = 1.1
     
     private let GRID_PADDING: Float = 1.0 // Padding around the grid in world units
@@ -325,10 +325,6 @@ class GameViewController: UIViewController {
         isRotating = true
         updateResetButtonState()
         
-        // Track completion of all animations
-        var completedAnimations = 0
-        let totalAnimations = cells.count
-        
         // Process each cell in the array
         for cell in cells {
             // Update rotation state (unbounded)
@@ -342,13 +338,7 @@ class GameViewController: UIViewController {
             let visualRotation = Float(rotationState) * -Float.pi / 2
             
             // Find the cylinder node for this position
-            guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { 
-                completedAnimations += 1
-                if completedAnimations == totalAnimations {
-                    onRotationComplete(rotatedCells: cells)
-                }
-                continue 
-            }
+            guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { continue }
             
             // Store original material and change to pink during rotation
             if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
@@ -356,34 +346,18 @@ class GameViewController: UIViewController {
                 material.diffuse.contents = UIColor.systemPink
             }
             
-            // Create springy rotation animation
-            let startRotation = cylinderNode.eulerAngles.y
-            let endRotation = visualRotation
+            // Animate the rotation
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = 0.5
             
-            // Use UIView.animate with spring parameters for bouncy animation
-            UIView.animate(
-                withDuration: 0.8,
-                delay: 0.0,
-                usingSpringWithDamping: 0.6, // Controls bounce (0.0 = very bouncy, 1.0 = no bounce)
-                initialSpringVelocity: 0.8, // Initial velocity for more dynamic start
-                options: [.curveEaseInOut],
-                animations: {
-                    // Animate the rotation using SCNTransaction
-                    SCNTransaction.begin()
-                    SCNTransaction.animationDuration = 0.8
-                    SCNTransaction.animationTimingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0)
-                    
-                    cylinderNode.eulerAngles.y = endRotation
-                    
-                    SCNTransaction.commit()
-                },
-                completion: { _ in
-                    completedAnimations += 1
-                    if completedAnimations == totalAnimations {
-                        self.onRotationComplete(rotatedCells: cells)
-                    }
-                }
-            )
+            cylinderNode.eulerAngles.y = visualRotation
+            
+            SCNTransaction.commit()
+        }
+        
+        // Set up a single completion block for the entire batch
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.onRotationComplete(rotatedCells: cells)
         }
     }
     
