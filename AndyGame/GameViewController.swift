@@ -56,9 +56,9 @@ class GameViewController: UIViewController {
     
     // Grid dimensions
     // vertical axis
-    private let GRID_ROWS = 10
+    private let GRID_ROWS = 20
     // horizontal axis
-    private let GRID_COLS = 8
+    private let GRID_COLS = 10
     private let GRID_SPACING = 1.1
     
     private let GRID_PADDING: Float = 1.0 // Padding around the grid in world units
@@ -86,6 +86,14 @@ class GameViewController: UIViewController {
     // Camera node reference
     private var cameraNode: SCNNode!
     
+    // Score tracking
+    private var currentScore: Int = 0
+    private var highScore: Int = 0
+    
+    // Score display labels
+    private var currentScoreLabel: UILabel!
+    private var highScoreLabel: UILabel!
+    
     var scene: SCNScene!
     var gridGroupNode: SCNNode!
 
@@ -97,6 +105,15 @@ class GameViewController: UIViewController {
         
         // create a new scene
         scene = SCNScene()
+        
+        // Load environment map
+        if let envMap = UIImage(named: "spherical.jpg") {
+            scene.lightingEnvironment.contents = envMap
+            scene.lightingEnvironment.intensity = 1.0
+            print("Environment map loaded successfully")
+        } else {
+            print("Could not load spherical.jpg as environment map")
+        }
         
         // create and add a camera to the scene
         let cameraNode = SCNNode()
@@ -161,7 +178,6 @@ class GameViewController: UIViewController {
           return
         }
 
-        
         // Get the pipe node from the loaded scene
         guard let pipeNode = pipeScene.rootNode.childNodes.first else {
             print("Error: No nodes found in Pipe.glb")
@@ -179,6 +195,8 @@ class GameViewController: UIViewController {
                 material.specular.contents = UIColor.white
                 material.lightingModel = .physicallyBased
                 material.shininess = 1000
+                material.metalness.contents = 1.0
+                material.roughness.contents = 0.2
                 cylinderGeometry.materials = [material]
                 
                 // Create cylinder node
@@ -204,7 +222,9 @@ class GameViewController: UIViewController {
                 // Store mapping between cylinder node and its grid position
                 cylinderNodes[cylinderNode] = CellPosition(row: row, col: col)
 
+                // Add pipe model as L-shape replacement
                 let childPipe = pipeNode.clone()
+                makePipeMaterialsReflective(childPipe)
                 childPipe.position = SCNVector3(
                     x: 0,
                     y: cylinderHeight / 2,
@@ -239,13 +259,14 @@ class GameViewController: UIViewController {
         // Create and setup reset button
         setupResetButton()
         
+        // Create and setup score display
+        setupScoreDisplay()
+        
         print("Scene setup complete. Total nodes in scene: \(scene.rootNode.childNodes.count)")
     }
     
     @objc
     func handleTap(_ gestureRecognize: UIGestureRecognizer) {
-        print("handleTap \(isRotating)")
-        // Check if any cylinder is currently rotating
         if isRotating {
             return
         }
@@ -272,6 +293,9 @@ class GameViewController: UIViewController {
             // Get the grid position for this cylinder
             guard let position = cylinderNodes[cylinderNode] else { return }
             
+            // Reset current score when a cylinder is tapped
+            resetCurrentScore()
+            
             // Rotate the clicked cell
             rotateCells([position])
         }
@@ -288,7 +312,10 @@ class GameViewController: UIViewController {
         // Process each cell in the array
         for cell in cells {
             // Increment rotation state (unbounded)
-            rotationStates[cell.row][cell.col] += 1
+            rotationStates[cell.row][cell.col] -= 1
+            
+            // Add 1 point for each rotation
+            addToScore(1)
             
             // Calculate visual rotation based on state
             let rotationState = rotationStates[cell.row][cell.col]
@@ -361,6 +388,7 @@ class GameViewController: UIViewController {
             }
         }
         
+        print("ntr: \(neighborsToRotate)")
         return neighborsToRotate
     }
     
@@ -384,14 +412,25 @@ class GameViewController: UIViewController {
             }
         }
         
+        print("newNeighborsToRotate \(newNeighborsToRotate)")
         // Deduplicate newNeighborsToRotate efficiently using a Set
         let uniqueNeighbors = Array(Set(newNeighborsToRotate))
         
         if uniqueNeighbors.count > 0 {
             print("Rotating neighbors: \(uniqueNeighbors)")
-            rotateCells(uniqueNeighbors)
+            // Add points for chain reaction rotations
+            // addToScore(uniqueNeighbors.count)
+            // rotateCells(uniqueNeighbors)
+
+            for cell in uniqueNeighbors {
+                let cylinderNode = findCylinderNode(at: cell.row, col: cell.col)
+                if let geometry = cylinderNode?.geometry, let material = geometry.firstMaterial {
+                    material.diffuse.contents = UIColor.systemBlue
+                }
+            }
+            isRotating = false
         } else {
-            print("No more rotations")
+            print("No connected neighbors found")
             isRotating = false
             originalMaterials.removeAll()
             updateResetButtonState()
@@ -460,26 +499,23 @@ class GameViewController: UIViewController {
                 self.animateSingleCellReset(cell: cell, isLast: index == diagonalCells.count - 1)
             }
         }
-        
-        print("Board reset started with \(diagonalCells.count) cells")
     }
     
     private func animateSingleCellReset(cell: CellPosition, isLast: Bool) {
-        // Reset rotation state to 0
+        // Randomise rotation stat
         let randomState = Int.random(in: 0...3)
         rotationStates[cell.row][cell.col] = randomState
         
         // Find the cylinder node for this position
         guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { return }
         
-        // Animate the rotation back to 0
         SCNTransaction.begin()
         SCNTransaction.animationDuration = 0.3
         
         let visualRotation = Float(randomState) * -Float.pi / 2
         cylinderNode.eulerAngles.y = visualRotation
         
-        // Reset material color to blue
+        // Reset material color
         if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
             material.diffuse.contents = UIColor.systemBlue
         }
@@ -494,6 +530,70 @@ class GameViewController: UIViewController {
                 print("Board reset complete")
             }
         }
+    }
+    
+    private func setupScoreDisplay() {
+        // Create current score label
+        currentScoreLabel = UILabel()
+        currentScoreLabel.text = "Score: 0"
+        currentScoreLabel.textColor = .white
+        currentScoreLabel.font = UIFont.systemFont(ofSize: 18, weight: .bold)
+        currentScoreLabel.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        currentScoreLabel.layer.cornerRadius = 8
+        currentScoreLabel.layer.masksToBounds = true
+        currentScoreLabel.textAlignment = .center
+        
+        // Create high score label
+        highScoreLabel = UILabel()
+        highScoreLabel.text = "High Score: 0"
+        highScoreLabel.textColor = .white
+        highScoreLabel.font = UIFont.systemFont(ofSize: 16, weight: .medium)
+        highScoreLabel.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        highScoreLabel.layer.cornerRadius = 8
+        highScoreLabel.layer.masksToBounds = true
+        highScoreLabel.textAlignment = .center
+        
+        // Add to view
+        view.addSubview(currentScoreLabel)
+        view.addSubview(highScoreLabel)
+        
+        // Setup constraints
+        currentScoreLabel.translatesAutoresizingMaskIntoConstraints = false
+        highScoreLabel.translatesAutoresizingMaskIntoConstraints = false
+        
+        NSLayoutConstraint.activate([
+            // Current score label
+            currentScoreLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
+            currentScoreLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            currentScoreLabel.widthAnchor.constraint(equalToConstant: 120),
+            currentScoreLabel.heightAnchor.constraint(equalToConstant: 30),
+            
+            // High score label
+            highScoreLabel.topAnchor.constraint(equalTo: currentScoreLabel.bottomAnchor, constant: 8),
+            highScoreLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            highScoreLabel.widthAnchor.constraint(equalToConstant: 120),
+            highScoreLabel.heightAnchor.constraint(equalToConstant: 25)
+        ])
+        
+        updateScoreDisplay()
+    }
+    
+    private func updateScoreDisplay() {
+        currentScoreLabel.text = "Score: \(currentScore)"
+        highScoreLabel.text = "High Score: \(highScore)"
+    }
+    
+    private func addToScore(_ points: Int) {
+        currentScore += points
+        if currentScore > highScore {
+            highScore = currentScore
+        }
+        updateScoreDisplay()
+    }
+    
+    private func resetCurrentScore() {
+        currentScore = 0
+        updateScoreDisplay()
     }
     
     override var prefersStatusBarHidden: Bool {
@@ -549,6 +649,21 @@ class GameViewController: UIViewController {
         
         // Update grid scale when view layout changes (e.g., safe area changes)
         updateGridScale()
+    }
+
+    // Recursively set PBR, metalness, roughness, and diffuse on all materials in a node tree
+    private func makePipeMaterialsReflective(_ node: SCNNode) {
+        if let geometry = node.geometry {
+            for material in geometry.materials {
+                material.lightingModel = .physicallyBased
+                material.metalness.contents = 1.0
+                material.roughness.contents = 0.1
+                material.diffuse.contents = UIColor.white
+            }
+        }
+        for child in node.childNodes {
+            makePipeMaterialsReflective(child)
+        }
     }
 
 }
