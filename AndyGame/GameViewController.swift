@@ -15,6 +15,10 @@ enum ROTATION: Int {
     case one = 1
     case two = 2
     case three = 3
+    
+    case none = -1
+    case ntwo = -2
+    case nthree = -3
 }
 
 struct CellPosition: Hashable {
@@ -31,8 +35,19 @@ let RIGHT: NEIGHBOR = (1, 0)
 
 // Matrix neighbor targeting [+-x, +-y]
 let RotationNeighbors: [ROTATION: [NEIGHBOR]] = [
+    // Negative rotation (counterclockwise, default, negative increment)
     // └ up right
     .zero: [UP, RIGHT],
+    // ┘ up left
+    .none: [UP, LEFT],
+    // ┐ left down
+    .ntwo: [LEFT, DOWN],
+    // ┌ right down
+    .nthree: [RIGHT, DOWN],
+
+    // Positive rotation (clockwise, positive increment)
+    // └ up right
+    // Same as above
     // ┌ right down
     .one: [RIGHT, DOWN],
     // ┐ left down
@@ -56,9 +71,9 @@ class GameViewController: UIViewController {
     
     // Grid dimensions
     // vertical axis
-    private let GRID_ROWS = 20
+    private let GRID_ROWS = 8
     // horizontal axis
-    private let GRID_COLS = 10
+    private let GRID_COLS = 6
     private let GRID_SPACING = 1.1
     
     private let GRID_PADDING: Float = 1.0 // Padding around the grid in world units
@@ -110,7 +125,6 @@ class GameViewController: UIViewController {
         if let envMap = UIImage(named: "spherical.jpg") {
             scene.lightingEnvironment.contents = envMap
             scene.lightingEnvironment.intensity = 1.0
-            print("Environment map loaded successfully")
         } else {
             print("Could not load spherical.jpg as environment map")
         }
@@ -261,8 +275,6 @@ class GameViewController: UIViewController {
         
         // Create and setup score display
         setupScoreDisplay()
-        
-        print("Scene setup complete. Total nodes in scene: \(scene.rootNode.childNodes.count)")
     }
     
     @objc
@@ -300,6 +312,10 @@ class GameViewController: UIViewController {
             rotateCells([position])
         }
     }
+    
+    /**
+     * Utility functions
+     */
 
     // On initial tap, this rotates the first cell.
     // On subsequent rotation completions, this function is called with the
@@ -309,9 +325,13 @@ class GameViewController: UIViewController {
         isRotating = true
         updateResetButtonState()
         
+        // Track completion of all animations
+        var completedAnimations = 0
+        let totalAnimations = cells.count
+        
         // Process each cell in the array
         for cell in cells {
-            // Increment rotation state (unbounded)
+            // Update rotation state (unbounded)
             rotationStates[cell.row][cell.col] -= 1
             
             // Add 1 point for each rotation
@@ -319,10 +339,16 @@ class GameViewController: UIViewController {
             
             // Calculate visual rotation based on state
             let rotationState = rotationStates[cell.row][cell.col]
-            let visualRotation = Float(rotationState) * -Float.pi / 2 // 90 degrees per state
+            let visualRotation = Float(rotationState) * -Float.pi / 2
             
             // Find the cylinder node for this position
-            guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { continue }
+            guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { 
+                completedAnimations += 1
+                if completedAnimations == totalAnimations {
+                    onRotationComplete(rotatedCells: cells)
+                }
+                continue 
+            }
             
             // Store original material and change to pink during rotation
             if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
@@ -330,20 +356,34 @@ class GameViewController: UIViewController {
                 material.diffuse.contents = UIColor.systemPink
             }
             
-            // Animate the rotation
-            SCNTransaction.begin()
-            SCNTransaction.animationDuration = 0.5
+            // Create springy rotation animation
+            let startRotation = cylinderNode.eulerAngles.y
+            let endRotation = visualRotation
             
-            cylinderNode.eulerAngles.y = visualRotation
-            
-            SCNTransaction.commit()
-            
-            print("Cylinder at (\(cell.row), \(cell.col)) rotated to state: \(rotationState)")
-        }
-        
-        // Set up a single completion block for the entire batch
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.onRotationComplete(rotatedCells: cells)
+            // Use UIView.animate with spring parameters for bouncy animation
+            UIView.animate(
+                withDuration: 0.8,
+                delay: 0.0,
+                usingSpringWithDamping: 0.6, // Controls bounce (0.0 = very bouncy, 1.0 = no bounce)
+                initialSpringVelocity: 0.8, // Initial velocity for more dynamic start
+                options: [.curveEaseInOut],
+                animations: {
+                    // Animate the rotation using SCNTransaction
+                    SCNTransaction.begin()
+                    SCNTransaction.animationDuration = 0.8
+                    SCNTransaction.animationTimingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0)
+                    
+                    cylinderNode.eulerAngles.y = endRotation
+                    
+                    SCNTransaction.commit()
+                },
+                completion: { _ in
+                    completedAnimations += 1
+                    if completedAnimations == totalAnimations {
+                        self.onRotationComplete(rotatedCells: cells)
+                    }
+                }
+            )
         }
     }
     
@@ -356,30 +396,40 @@ class GameViewController: UIViewController {
         }
         return nil
     }
+
+    // Get a ROTATION from an unbounded rotation state
+    private func getRotation(unboundedRotation: Int) -> ROTATION {
+        return ROTATION(rawValue: unboundedRotation % 4) ?? .zero
+    }
     
     private func findConnectedNeighbors(
-        x: Int,
-        y: Int,
-        rotation: ROTATION,
-        currentRotations: [[Int]]
+        row: Int,
+        col: Int,
     ) -> [CellPosition] {
+        let rotation = getRotation(unboundedRotation: rotationStates[row][col])
         var neighborsToRotate: [CellPosition] = []
         
         // Check each direction from this pipe
         for (dx, dy) in RotationNeighbors[rotation] ?? [] {
-            let nx = x + dx
-            let ny = y + dy
+            let nx = col + dx
+            let ny = row + dy
             
             // Check if neighbor exists on the board
-            guard ny >= 0 && ny < currentRotations.count && 
-                  nx >= 0 && nx < currentRotations[ny].count else { continue }
+            guard ny >= 0 && ny < GRID_ROWS && 
+                  nx >= 0 && nx < GRID_COLS else { continue }
             
-            let neighborUnbounded = currentRotations[ny][nx]
-            let neighbor = ROTATION(rawValue: neighborUnbounded % 4) ?? .zero
+            let neighbor = getRotation(unboundedRotation: rotationStates[ny][nx])
+            let neighborCylinder = findCylinderNode(at: ny, col: nx)
+
+//            if let neighborCylinder = neighborCylinder {
+//                if let geometry = neighborCylinder.geometry, let material = geometry.firstMaterial {
+//                    material.diffuse.contents = UIColor.green
+//                }
+//            }
             
             // Then make sure the neighbor points back at us
             let neighborPointsAtUsToo = (RotationNeighbors[neighbor] ?? []).contains { (ndx, ndy) in
-                let points = nx + ndx == x && ny + ndy == y
+                let points = nx + ndx == col && ny + ndy == row
                 return points
             }
             
@@ -388,7 +438,6 @@ class GameViewController: UIViewController {
             }
         }
         
-        print("ntr: \(neighborsToRotate)")
         return neighborsToRotate
     }
     
@@ -403,34 +452,31 @@ class GameViewController: UIViewController {
         var newNeighborsToRotate: [CellPosition] = []
         // Find connected neighbors for each rotated cell
         for cell in rotatedCells {
-            let currentRotation = ROTATION(rawValue: rotationStates[cell.row][cell.col] % 4) ?? .zero
-            let neighbors = findConnectedNeighbors(x: cell.col, y: cell.row, rotation: currentRotation, currentRotations: rotationStates)
+            let neighbors = findConnectedNeighbors(row: cell.row, col: cell.col)
 
-            if neighbors.count > 0 {
-                newNeighborsToRotate.append(cell)
-                newNeighborsToRotate.append(contentsOf: neighbors)
-            }
+             if neighbors.count > 0 {
+                 newNeighborsToRotate.append(cell)
+                 newNeighborsToRotate.append(contentsOf: neighbors)
+             }
         }
         
-        print("newNeighborsToRotate \(newNeighborsToRotate)")
         // Deduplicate newNeighborsToRotate efficiently using a Set
         let uniqueNeighbors = Array(Set(newNeighborsToRotate))
         
         if uniqueNeighbors.count > 0 {
-            print("Rotating neighbors: \(uniqueNeighbors)")
+//            print("Rotating neighbors: \(uniqueNeighbors)")
             // Add points for chain reaction rotations
-            // addToScore(uniqueNeighbors.count)
-            // rotateCells(uniqueNeighbors)
+            addToScore(uniqueNeighbors.count)
+            rotateCells(uniqueNeighbors)
 
-            for cell in uniqueNeighbors {
-                let cylinderNode = findCylinderNode(at: cell.row, col: cell.col)
-                if let geometry = cylinderNode?.geometry, let material = geometry.firstMaterial {
-                    material.diffuse.contents = UIColor.systemBlue
-                }
-            }
-            isRotating = false
+//            for cell in uniqueNeighbors {
+//                let cylinderNode = findCylinderNode(at: cell.row, col: cell.col)
+//                if let geometry = cylinderNode?.geometry, let material = geometry.firstMaterial {
+//                    material.diffuse.contents = UIColor.red
+//                }
+//            }
+//            isRotating = false
         } else {
-            print("No connected neighbors found")
             isRotating = false
             originalMaterials.removeAll()
             updateResetButtonState()
@@ -527,10 +573,14 @@ class GameViewController: UIViewController {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 self.isRotating = false
                 self.updateResetButtonState()
-                print("Board reset complete")
             }
         }
     }
+    
+    
+    /**
+     * UI
+     */
     
     private func setupScoreDisplay() {
         // Create current score label
@@ -631,8 +681,6 @@ class GameViewController: UIViewController {
         )
         
         gridGroupNode.scale = SCNVector3(x: scale, y: scale, z: scale)
-        
-        print("Grid scaled to: \(scale) for screen aspect: \(cameraAspect)")
     }
     
     override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
@@ -665,5 +713,4 @@ class GameViewController: UIViewController {
             makePipeMaterialsReflective(child)
         }
     }
-
 }
