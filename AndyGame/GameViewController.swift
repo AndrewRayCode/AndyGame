@@ -431,7 +431,7 @@ class GameViewController: UIViewController {
             let bottomRight = square[3]
             let topLeft = square[0]
             
-            // Highlight all pipes in the square as rotating
+            // Highlight all pipes in the square as rotating (red for clicked squares)
             highlightRotatingPipe(topLeft)
             highlightRotatingPipe(topRight)
             highlightRotatingPipe(bottomLeft)
@@ -1089,8 +1089,8 @@ class GameViewController: UIViewController {
             let wasClicked = clickedSquarePipes.contains(pipe)
             
             if wasClicked {
-                // Square was clicked, reset to original color
-                resetPipeColor(pipe)
+                // Square was clicked, keep it gold (color change already handled in handleSquarePipeClick)
+                // Don't reset color here since we want it to stay gold
             } else {
                 // Square expired without being clicked, turn gray
                 turnPipeGray(pipe)
@@ -1166,6 +1166,12 @@ class GameViewController: UIViewController {
                 // Mark all pipes in this square as clicked
                 for squarePipe in square {
                     clickedSquarePipes.insert(squarePipe)
+                }
+                
+                // Turn all pipes in the square gold as they sink back down
+                for squarePipe in square {
+                    animateColorChange(for: squarePipe, to: UIColor.systemYellow, duration: 0.3)
+                    animateCellYPosition(for: squarePipe, towardCamera: false, duration: 0.3)
                 }
                 
                 deactivateSquare(square)
