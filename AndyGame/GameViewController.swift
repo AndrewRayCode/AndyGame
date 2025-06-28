@@ -52,13 +52,26 @@ func loadGLB(named filename: String) -> SCNScene? {
     }
 }
 
+/**
+ * Non-interactive Bonus elements:
+ * - Island bonus?
+ * - All cells rotated in one game bonus?
+ * - All cells rotated in one *move* bonus?
+ * - Move that goes over 5-10 etc rotations?
+ * - Square formation (and then it auto breaks) bonus?
+ * Interactive elements:
+ * - Move counter limit
+ * - Last chance (and follow-ups)
+ * - Square breaker
+ * - Multiple board sizes?
+ */
 class GameViewController: UIViewController {
     
     // Grid dimensions
     // vertical axis
-    private let GRID_ROWS = 10
+    private let GRID_ROWS = 12
     // horizontal axis
-    private let GRID_COLS = 8
+    private let GRID_COLS = 10
     private let GRID_SPACING = 1.1
     
     private let GRID_PADDING: Float = 1.0 // Padding around the grid in world units
@@ -201,7 +214,7 @@ class GameViewController: UIViewController {
         gridGroupNode.scale = SCNVector3(x: scale, y: scale, z: scale)
 
         // Place the camera for top-down view - directly above the grid center
-        cameraNode.position = SCNVector3(x: 0, y: CAMERA_DISTANCE, z: 0)
+        cameraNode.position = SCNVector3(x: 0, y: CAMERA_DISTANCE, z: -0.5)
         cameraNode.eulerAngles = SCNVector3(x: -Float.pi/2, y: 0, z: 0) // Look straight down
         
         // Scale the grid to fit the screen
@@ -291,9 +304,6 @@ class GameViewController: UIViewController {
                 cylinderNode.addChildNode(childPipe)
             }
         }
-        
-        // Randomize the initial board state
-        resetBoard()
 
         // set the scene to the view
         scnView.scene = scene
@@ -322,6 +332,9 @@ class GameViewController: UIViewController {
         
         // Setup banner container
         setupBannerContainer()
+        
+        // Randomize the initial board state
+        resetBoard()
     }
     
     @objc
@@ -380,10 +393,7 @@ class GameViewController: UIViewController {
             // Decrement remaining moves
             remainingMoves -= 1
             updateMovesDisplay()
-            
-            // Reset current score when a cylinder is tapped
-            resetCurrentScore()
-            
+
             // Rotate the clicked cell
             rotateCells([position], [])
         }
@@ -545,18 +555,8 @@ class GameViewController: UIViewController {
         let uniqueNeighbors = Array(Set(newNeighborsToRotate))
         
         if uniqueNeighbors.count > 0 {
-//            print("Rotating neighbors: \(uniqueNeighbors)")
-            // Add points for chain reaction rotations
             addToScore(uniqueNeighbors.count)
             rotateCells(uniqueNeighbors, clickedSquareCells)
-
-//            for cell in uniqueNeighbors {
-//                let cylinderNode = findCylinderNode(at: cell.row, col: cell.col)
-//                if let geometry = cylinderNode?.geometry, let material = geometry.firstMaterial {
-//                    material.diffuse.contents = UIColor.red
-//                }
-//            }
-//            isRotating = false
         } else {
             isRotating = false
             originalMaterials.removeAll()
@@ -565,8 +565,8 @@ class GameViewController: UIViewController {
             // Stop square pipe interaction when rotation ends
             stopSquarePipeInteraction()
             
-            // 10% chance to trigger last chance mechanic
-            if Int.random(in: 1...10) > 1 {
+            // Chance to trigger last chance mechanic
+            if Int.random(in: 1...10) > 8 && remainingMoves < 4 {
                 triggerLastChance()
             }
         }
@@ -656,6 +656,8 @@ class GameViewController: UIViewController {
         lastChanceCell = nil
         
         squarePipeStartTime = nil
+        
+        resetCurrentScore()
     }
 
     // Animate a pipe rotation with spring physics
@@ -709,18 +711,18 @@ class GameViewController: UIViewController {
         rotationStates[cell.row][cell.col] += randomState
         
         // Force a square starting at 1,1 on the board
-        if cell.row == 1 && cell.col == 1 {
-            rotationStates[cell.row][cell.col] = 1
-        }
-        if cell.row == 1 && cell.col == 2 {
-            rotationStates[cell.row][cell.col] = 2
-        }
-        if cell.row == 2 && cell.col == 1 {
-            rotationStates[cell.row][cell.col] = 0
-        }
-        if cell.row == 2 && cell.col == 2 {
-            rotationStates[cell.row][cell.col] = 3
-        }
+        // if cell.row == 1 && cell.col == 1 {
+        //     rotationStates[cell.row][cell.col] = 1
+        // }
+        // if cell.row == 1 && cell.col == 2 {
+        //     rotationStates[cell.row][cell.col] = 2
+        // }
+        // if cell.row == 2 && cell.col == 1 {
+        //     rotationStates[cell.row][cell.col] = 0
+        // }
+        // if cell.row == 2 && cell.col == 2 {
+        //     rotationStates[cell.row][cell.col] = 3
+        // }
         let rotation = rotationStates[cell.row][cell.col]
         
         let visualRotation = Float(rotation) * -Float.pi / 2
@@ -741,12 +743,7 @@ class GameViewController: UIViewController {
             completion()
         }
     }
-    
-    
-    /**
-     * UI
-     */
-    
+
     private func setupScoreDisplay() {
         // Create current score label
         currentScoreLabel = UILabel()
@@ -839,16 +836,31 @@ class GameViewController: UIViewController {
     }
     
     private func updateScoreDisplay() {
-        currentScoreLabel.text = "Score: \(currentScore)"
-        highScoreLabel.text = "\(highScore)"
+        let numberFormatter = NumberFormatter()
+        numberFormatter.numberStyle = .decimal
+        
+        if let formattedCurrentScore = numberFormatter.string(from: NSNumber(value: currentScore)) {
+            currentScoreLabel.text = "Score: \(formattedCurrentScore)"
+        } else {
+            currentScoreLabel.text = "Score: \(currentScore)"
+        }
+        
+        if let formattedHighScore = numberFormatter.string(from: NSNumber(value: highScore)) {
+            highScoreLabel.text = "\(formattedHighScore)"
+        } else {
+            highScoreLabel.text = "\(highScore)"
+        }
     }
     
     private func updateMovesDisplay() {
         guard let movesLabel = movesLabel else { return }
         
-        if remainingMoves > 0 {
+        if remainingMoves > 1 {
             movesLabel.text = "Moves: \(remainingMoves)"
             movesLabel.textColor = .white
+        } else if remainingMoves == 1 {
+            movesLabel.text = "Last move!"
+            movesLabel.textColor = UIColor.systemYellow
         } else {
             movesLabel.text = "No moves remaining"
             movesLabel.textColor = UIColor.systemRed
@@ -1156,8 +1168,14 @@ class GameViewController: UIViewController {
         // Add bonus points
         addToScore(10)
         
-        // Show success banner
-        showBanner(message: "Last Chance! +10 points! 🎯")
+        // Check if user has no moves left and give them one more
+        if remainingMoves <= 0 {
+            remainingMoves = 1
+            updateMovesDisplay()
+            showBanner(message: "One more move! 🎯")
+        } else {
+            showBanner(message: "Randomize! +10 points! 🎯")
+        }
         
         // Trigger radius randomization around the clicked cell
         randomizeRadiusAroundCell(cell)
@@ -1307,7 +1325,7 @@ class GameViewController: UIViewController {
             
             NSLayoutConstraint.activate([
                 container.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-                container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: 20),
+                container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -100),
                 container.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.8),
                 container.heightAnchor.constraint(greaterThanOrEqualToConstant: 50)
             ])
@@ -1401,7 +1419,7 @@ class GameViewController: UIViewController {
     // Randomize cells in a radius around a given cell
     private func randomizeRadiusAroundCell(_ centerCell: CellPosition) {
         // Calculate radius of board size. This needs to be configurable
-        let radius = max(1, Int(Double(min(GRID_ROWS, GRID_COLS)) * 0.5))
+        let radius = max(1, Int(Double(min(GRID_ROWS, GRID_COLS)) * 0.75))
         
         // Collect all cells within the radius
         var cellsInRadius: [CellPosition] = []
