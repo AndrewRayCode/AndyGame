@@ -15,10 +15,6 @@ enum ROTATION: Int {
     case one = 1
     case two = 2
     case three = 3
-    
-    case none = -1
-    case ntwo = -2
-    case nthree = -3
 }
 
 struct CellPosition: Hashable {
@@ -35,19 +31,8 @@ let RIGHT: NEIGHBOR = (1, 0)
 
 // Matrix neighbor targeting [+-x, +-y]
 let RotationNeighbors: [ROTATION: [NEIGHBOR]] = [
-    // Negative rotation (counterclockwise, default, negative increment)
     // └ up right
     .zero: [UP, RIGHT],
-    // ┘ up left
-    .none: [UP, LEFT],
-    // ┐ left down
-    .ntwo: [LEFT, DOWN],
-    // ┌ right down
-    .nthree: [RIGHT, DOWN],
-
-    // Positive rotation (clockwise, positive increment)
-    // └ up right
-    // Same as above
     // ┌ right down
     .one: [RIGHT, DOWN],
     // ┐ left down
@@ -71,14 +56,16 @@ class GameViewController: UIViewController {
     
     // Grid dimensions
     // vertical axis
-    private let GRID_ROWS = 12
+    private let GRID_ROWS = 10
     // horizontal axis
-    private let GRID_COLS = 10
+    private let GRID_COLS = 8
     private let GRID_SPACING = 1.1
     
     private let GRID_PADDING: Float = 1.0 // Padding around the grid in world units
     
     private let CAMERA_DISTANCE: Float = 10.0
+    
+    private let ROTATION_TIME = 0.6
     
     private let cylinderRadius: Float = 0.5
     private let cylinderHeight: Float = 0.5
@@ -94,6 +81,33 @@ class GameViewController: UIViewController {
     
     // Store original materials to restore after rotation
     var originalMaterials: [SCNNode: SCNMaterial] = [:]
+    
+    // Completion tracking for animations
+    private var animationCompletionCount = 0
+    private var totalAnimationsInBatch = 0
+    private var currentRotatingCells: [CellPosition] = []
+    
+    // Store detected pipe squares
+    private var pipeSquares: [[CellPosition]] = []
+    
+    // Square pipe interaction system
+    private var clickableSquarePipes: Set<CellPosition> = []
+    private var squarePipeTimers: [String: Timer] = [:]
+    private var squarePipeGreenTimers: [String: Timer] = [:]
+    private var squarePipeStartTime: Date?
+
+    private let SQUARE_CLICK_MIN_WAIT = 1.0
+    private let SQUARE_CLICK_MAX_WAIT = 2.0
+    private let SQAURE_CLICK_TIMEOUT = 5.0
+    
+    // Track clicked squares for next rotation
+    private var clickedSquares: [[CellPosition]] = []
+    
+    // Track expired squares (squares that weren't clicked in time)
+    private var expiredSquares: Set<CellPosition> = []
+    
+    // Track squares that were clicked (to prevent them from turning gray)
+    private var clickedSquarePipes: Set<CellPosition> = []
     
     // Reset button
     private var resetButton: UIButton!
@@ -279,10 +293,6 @@ class GameViewController: UIViewController {
     
     @objc
     func handleTap(_ gestureRecognize: UIGestureRecognizer) {
-        if isRotating {
-            return
-        }
-        
         // retrieve the SCNView
         let scnView = self.view as! SCNView
         
@@ -305,11 +315,28 @@ class GameViewController: UIViewController {
             // Get the grid position for this cylinder
             guard let position = cylinderNodes[cylinderNode] else { return }
             
+            // Don't allow clicking on expired (gray) pipes
+            if expiredSquares.contains(position) {
+                return
+            }
+            
+            // Check if this is a clickable square pipe
+            if clickableSquarePipes.contains(position) {
+                // Handle square pipe click
+                handleSquarePipeClick(position)
+                return
+            }
+            
+            // Normal pipe click - only allow if not rotating
+            if isRotating {
+                return
+            }
+            
             // Reset current score when a cylinder is tapped
             resetCurrentScore()
             
             // Rotate the clicked cell
-            rotateCells([position])
+            rotateCells([position], [])
         }
     }
     
@@ -320,14 +347,44 @@ class GameViewController: UIViewController {
     // On initial tap, this rotates the first cell.
     // On subsequent rotation completions, this function is called with the
     // *finished* rotations   
-    private func rotateCells(_ cells: [CellPosition]) {
+    private func rotateCells(_ cells: [CellPosition], _ squareCellsToExpand: [[CellPosition]] = []) {
         // Set rotating flag to prevent other taps
         isRotating = true
         updateResetButtonState()
+        detectPipeSquares()
         
-        // Track completion of all animations
-        var completedAnimations = 0
-        let totalAnimations = cells.count
+        // Start square pipe interaction system only if not already started
+        if squarePipeStartTime == nil {
+            startSquarePipeInteraction()
+        }
+        
+        // Initialize completion tracking
+        animationCompletionCount = 0
+        totalAnimationsInBatch = cells.count
+        currentRotatingCells = cells
+
+        for square in squareCellsToExpand {
+            let topRight = square[1]
+            let bottomLeft = square[2]
+            let bottomRight = square[3]
+            let topLeft = square[0]
+            
+            // Highlight all pipes in the square as rotating
+            highlightRotatingPipe(topLeft)
+            highlightRotatingPipe(topRight)
+            highlightRotatingPipe(bottomLeft)
+            highlightRotatingPipe(bottomRight)
+            
+            rotationStates[topLeft.row][topLeft.col] = 3
+            rotationStates[topRight.row][topRight.col] = 0
+            rotationStates[bottomLeft.row][bottomLeft.col] = 2
+            rotationStates[bottomRight.row][bottomRight.col] = 1
+            
+            animatePipeRotation(cell: topLeft, targetRotation: 3, completion: nil)
+            animatePipeRotation(cell: topRight, targetRotation: 0, completion: nil)
+            animatePipeRotation(cell: bottomLeft, targetRotation: 2, completion: nil)
+            animatePipeRotation(cell: bottomRight, targetRotation: 1, completion: nil)
+        }
         
         // Process each cell in the array
         for cell in cells {
@@ -339,39 +396,21 @@ class GameViewController: UIViewController {
             
             // Calculate visual rotation based on state
             let rotationState = rotationStates[cell.row][cell.col]
-            let visualRotation = Float(rotationState) * -Float.pi / 2
+
+            // Highlight the pipe as rotating
+            highlightRotatingPipe(cell)
             
-            // Find the cylinder node for this position
-            guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { 
-                completedAnimations += 1
-                if completedAnimations == totalAnimations {
-                    onRotationComplete(rotatedCells: cells)
+            // Animate a pipe rotation with spring physics
+            animatePipeRotation(cell: cell, targetRotation: rotationState, completion: {
+                // Increment the completion counter
+                self.animationCompletionCount += 1
+                
+                // Check if all animations in this batch are complete
+                if self.animationCompletionCount >= self.totalAnimationsInBatch {
+                    let cellsAndCellsInSquares = cells + squareCellsToExpand.flatMap { $0 }
+                    self.onRotationComplete(rotatedCells: cellsAndCellsInSquares)
                 }
-                continue 
-            }
-            
-            // Store original material and change to pink during rotation
-            if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
-                originalMaterials[cylinderNode] = material.copy() as? SCNMaterial
-                material.diffuse.contents = UIColor.systemPink
-            }
-            
-            // Create springy rotation animation using SCNTransaction with completion
-            SCNTransaction.begin()
-            SCNTransaction.animationDuration = 0.5
-            SCNTransaction.animationTimingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0)
-            
-            // Set the completion block to track when this animation finishes
-            SCNTransaction.completionBlock = {
-                completedAnimations += 1
-                if completedAnimations == totalAnimations {
-                    self.onRotationComplete(rotatedCells: cells)
-                }
-            }
-            
-            cylinderNode.eulerAngles.y = visualRotation
-            
-            SCNTransaction.commit()
+            })
         }
     }
     
@@ -387,7 +426,9 @@ class GameViewController: UIViewController {
 
     // Get a ROTATION from an unbounded rotation state
     private func getRotation(unboundedRotation: Int) -> ROTATION {
-        return ROTATION(rawValue: unboundedRotation % 4) ?? .zero
+        // Handle negative numbers properly by using ((n % 4) + 4) % 4
+        let normalizedRotation = ((unboundedRotation % 4) + 4) % 4
+        return ROTATION(rawValue: normalizedRotation) ?? .zero
     }
     
     private func findConnectedNeighbors(
@@ -407,13 +448,6 @@ class GameViewController: UIViewController {
                   nx >= 0 && nx < GRID_COLS else { continue }
             
             let neighbor = getRotation(unboundedRotation: rotationStates[ny][nx])
-            let neighborCylinder = findCylinderNode(at: ny, col: nx)
-
-//            if let neighborCylinder = neighborCylinder {
-//                if let geometry = neighborCylinder.geometry, let material = geometry.firstMaterial {
-//                    material.diffuse.contents = UIColor.green
-//                }
-//            }
             
             // Then make sure the neighbor points back at us
             let neighborPointsAtUsToo = (RotationNeighbors[neighbor] ?? []).contains { (ndx, ndy) in
@@ -437,6 +471,9 @@ class GameViewController: UIViewController {
             }
         }
         
+        // Detect pipe squares after rotation
+        detectPipeSquares()
+        
         var newNeighborsToRotate: [CellPosition] = []
         // Find connected neighbors for each rotated cell
         for cell in rotatedCells {
@@ -448,6 +485,10 @@ class GameViewController: UIViewController {
              }
         }
         
+        // Process clicked squares and add their cells to rotation
+        let clickedSquareCells = processClickedSquares()
+        // newNeighborsToRotate.append(contentsOf: clickedSquareCells)
+        
         // Deduplicate newNeighborsToRotate efficiently using a Set
         let uniqueNeighbors = Array(Set(newNeighborsToRotate))
         
@@ -455,7 +496,7 @@ class GameViewController: UIViewController {
 //            print("Rotating neighbors: \(uniqueNeighbors)")
             // Add points for chain reaction rotations
             addToScore(uniqueNeighbors.count)
-            rotateCells(uniqueNeighbors)
+            rotateCells(uniqueNeighbors, clickedSquareCells)
 
 //            for cell in uniqueNeighbors {
 //                let cylinderNode = findCylinderNode(at: cell.row, col: cell.col)
@@ -468,6 +509,9 @@ class GameViewController: UIViewController {
             isRotating = false
             originalMaterials.removeAll()
             updateResetButtonState()
+            
+            // Stop square pipe interaction when rotation ends
+            stopSquarePipeInteraction()
         }
     }
     
@@ -506,23 +550,19 @@ class GameViewController: UIViewController {
         // Disable interactions during reset
         isRotating = true
         
+        // Clear expired squares and reset their colors
+        for pipe in expiredSquares {
+            resetExpiredPipeColor(pipe)
+        }
+        expiredSquares.removeAll()
+        clickedSquarePipes.removeAll()
+        
         // Create array of all cells in diagonal order (top-right to bottom-left)
         var diagonalCells: [CellPosition] = []
         for row in 0..<GRID_ROWS {
             for col in 0..<GRID_COLS {
                 diagonalCells.append(CellPosition(row: row, col: col))
             }
-        }
-        
-        // Sort cells in diagonal order (top-right to bottom-left)
-        diagonalCells.sort { cell1, cell2 in
-            let sum1 = cell1.row + cell1.col
-            let sum2 = cell2.row + cell2.col
-            if sum1 == sum2 {
-                // If same diagonal, prioritize top-right (lower row, higher col)
-                return cell1.row < cell2.row
-            }
-            return sum1 > sum2 // Higher sum = closer to top-right
         }
         
         // Track completion of all reset animations
@@ -546,11 +586,59 @@ class GameViewController: UIViewController {
             }
         }
     }
+
+    // Animate a pipe rotation with spring physics
+    private func animatePipeRotation(cell: CellPosition, targetRotation: Int, completion: (() -> Void)? = nil) {
+        guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else {
+            completion?()
+            return
+        }
+        let visualRotation = Float(targetRotation) * -Float.pi / 2
+        
+        // Create springy rotation animation using CASpringAnimation
+        let springAnimation = CASpringAnimation(keyPath: "eulerAngles.y")
+        springAnimation.fromValue = cylinderNode.eulerAngles.y
+        springAnimation.toValue = visualRotation
+        springAnimation.duration = ROTATION_TIME
+        springAnimation.damping = 20.0 // Spring damping (higher = less bouncy)
+        springAnimation.stiffness = 400.0 // Spring stiffness (higher = faster)
+        springAnimation.mass = 1.0 // Mass of the spring (higher = slower)
+        springAnimation.initialVelocity = 0.5 // Initial velocity
+        
+        // Store completion callback
+        if let completion = completion {
+            springAnimation.setValue(completion, forKey: "completionCallback")
+            // Set up completion tracking
+            springAnimation.delegate = self
+        }
+        
+        
+        // Store reference to track completion
+        let animationKey = "rotation_\(cell.row)_\(cell.col)"
+        cylinderNode.addAnimation(springAnimation, forKey: animationKey)
+        
+        // Update the actual property
+        cylinderNode.eulerAngles.y = visualRotation
+    }
     
     private func animateSingleCellReset(cell: CellPosition, completion: @escaping () -> Void) {
         // Randomise rotation stat
         let randomState = Int.random(in: 0...3)
         rotationStates[cell.row][cell.col] += randomState
+        
+        // Force a square starting at 1,1 on the board
+        if cell.row == 1 && cell.col == 1 {
+            rotationStates[cell.row][cell.col] = 1
+        }
+        if cell.row == 1 && cell.col == 2 {
+            rotationStates[cell.row][cell.col] = 2
+        }
+        if cell.row == 2 && cell.col == 1 {
+            rotationStates[cell.row][cell.col] = 0
+        }
+        if cell.row == 2 && cell.col == 2 {
+            rotationStates[cell.row][cell.col] = 3
+        }
         let rotation = rotationStates[cell.row][cell.col]
         
         // Find the cylinder node for this position
@@ -715,6 +803,245 @@ class GameViewController: UIViewController {
         }
         for child in node.childNodes {
             makePipeMaterialsReflective(child)
+        }
+    }
+
+    // Detect 2x2 squares formed by pipes pointing at each other
+    private func detectPipeSquares() {
+        pipeSquares.removeAll()
+        
+        // Check each possible 2x2 square on the board
+        for row in 0..<(GRID_ROWS - 1) {
+            for col in 0..<(GRID_COLS - 1) {
+                // Check if this 2x2 area forms a square with the specific pattern
+                if isSquarePattern(at: row, col: col) {
+                    let squareCells = [
+                        CellPosition(row: row, col: col),
+                        CellPosition(row: row, col: col + 1),
+                        CellPosition(row: row + 1, col: col),
+                        CellPosition(row: row + 1, col: col + 1)
+                    ]
+                    pipeSquares.append(squareCells)
+                }
+            }
+        }
+    }
+    
+    // Check if a 2x2 area forms the specific square pattern
+    private func isSquarePattern(at row: Int, col: Int) -> Bool {
+        // Check if all cells in the 2x2 area have the correct rotations
+        let topLeft = getRotation(unboundedRotation: rotationStates[row][col])
+        let topRight = getRotation(unboundedRotation: rotationStates[row][col + 1])
+        let bottomLeft = getRotation(unboundedRotation: rotationStates[row + 1][col])
+        let bottomRight = getRotation(unboundedRotation: rotationStates[row + 1][col + 1])
+        
+        // Check for the specific pattern: [[.one, .two], [.zero, .three]]
+        return topLeft == .one && topRight == .two && 
+               bottomLeft == .zero && bottomRight == .three
+    }
+    
+    // Start the square pipe interaction system
+    private func startSquarePipeInteraction() {
+        // Clear any existing timers
+        stopSquarePipeInteraction()
+        
+        // Record start time
+        squarePipeStartTime = Date()
+        
+        // For each square, schedule activation of the entire square
+        for square in pipeSquares {
+            let randomDelay = Double.random(in: SQUARE_CLICK_MIN_WAIT...SQUARE_CLICK_MAX_WAIT)
+            
+            let timer = Timer.scheduledTimer(withTimeInterval: randomDelay, repeats: false) { [weak self] _ in
+                self?.activateSquare(square)
+            }
+            
+            // Store timer with a unique key for the square
+            let squareKey = "square_\(square[0].row)_\(square[0].col)"
+            squarePipeTimers[squareKey] = timer
+        }
+    }
+    
+    // Stop the square pipe interaction system
+    private func stopSquarePipeInteraction() {
+        // Cancel all timers
+        for timer in squarePipeTimers.values {
+            timer.invalidate()
+        }
+        squarePipeTimers.removeAll()
+        
+        // Cancel green timers
+        for timer in squarePipeGreenTimers.values {
+            timer.invalidate()
+        }
+        squarePipeGreenTimers.removeAll()
+        
+        // Clear clickable pipes and reset colors (but not gray pipes)
+        for pipe in clickableSquarePipes {
+            resetPipeColor(pipe)
+        }
+        clickableSquarePipes.removeAll()
+        
+        // Clear clicked squares when rotation ends
+        clickedSquares.removeAll()
+        clickedSquarePipes.removeAll()
+        
+        squarePipeStartTime = nil
+    }
+    
+    // Activate an entire square (make all pipes clickable and green)
+    private func activateSquare(_ square: [CellPosition]) {
+        // Only activate if still rotating
+        guard isRotating else { return }
+        
+        // Add all pipes in the square to clickable set
+        for pipe in square {
+            clickableSquarePipes.insert(pipe)
+            turnPipeGreen(pipe)
+        }
+        
+        // Schedule deactivation of entire square after 3 seconds
+        let greenTimer = Timer.scheduledTimer(withTimeInterval: SQAURE_CLICK_TIMEOUT, repeats: false) { [weak self] _ in
+            self?.deactivateSquare(square)
+        }
+        
+        // Store timer with a unique key for the square
+        let squareKey = "square_\(square[0].row)_\(square[0].col)"
+        squarePipeGreenTimers[squareKey] = greenTimer
+    }
+    
+    // Deactivate an entire square (remove all pipes from clickable and reset colors)
+    private func deactivateSquare(_ square: [CellPosition]) {
+        for pipe in square {
+            clickableSquarePipes.remove(pipe)
+            
+            // Check if this pipe was clicked
+            let wasClicked = clickedSquarePipes.contains(pipe)
+            
+            if wasClicked {
+                // Square was clicked, reset to original color
+                resetPipeColor(pipe)
+            } else {
+                // Square expired without being clicked, turn gray
+                turnPipeGray(pipe)
+                expiredSquares.insert(pipe)
+            }
+        }
+        
+        // Remove the timer
+        let squareKey = "square_\(square[0].row)_\(square[0].col)"
+        squarePipeGreenTimers.removeValue(forKey: squareKey)
+    }
+    
+    // Turn a pipe green to indicate it's clickable
+    private func turnPipeGreen(_ pipe: CellPosition) {
+        guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
+        
+        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+            material.diffuse.contents = UIColor.systemGreen
+        }
+    }
+    
+    // Turn a pipe gray to indicate it's expired
+    private func turnPipeGray(_ pipe: CellPosition) {
+        guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
+        
+        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+            material.diffuse.contents = UIColor.gray
+        }
+    }
+    
+    // Highlight a pipe as rotating (pink color)
+    private func highlightRotatingPipe(_ pipe: CellPosition) {
+        guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
+        
+        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+            // Store original material only if we haven't stored it yet in this rotation cycle
+            if originalMaterials[cylinderNode] == nil {
+                // Store the true original color (blue) regardless of current color
+                let originalMaterial = material.copy() as? SCNMaterial
+                originalMaterial?.diffuse.contents = UIColor.systemBlue
+                originalMaterials[cylinderNode] = originalMaterial
+            }
+            material.diffuse.contents = UIColor.systemPink
+        }
+    }
+    
+    // Reset a pipe's color to its original state
+    private func resetPipeColor(_ pipe: CellPosition) {
+        // Don't reset gray pipes unless the board is being reset
+        if expiredSquares.contains(pipe) {
+            return
+        }
+        
+        guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
+        
+        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+            // Check if this pipe was in the original materials (pink during rotation)
+            if let originalMaterial = originalMaterials[cylinderNode] {
+                material.diffuse.contents = originalMaterial.diffuse.contents
+            } else {
+                // Reset to default blue
+                material.diffuse.contents = UIColor.systemBlue
+            }
+        }
+    }
+    
+    // Handle click on a square pipe during rotation
+    private func handleSquarePipeClick(_ pipe: CellPosition) {
+        // Add bonus points for clicking square pipes
+        addToScore(5)
+        
+        // Find which square this pipe belongs to and deactivate the entire square
+        for square in pipeSquares {
+            if square.contains(pipe) {
+                // Mark all pipes in this square as clicked
+                for squarePipe in square {
+                    clickedSquarePipes.insert(squarePipe)
+                }
+                
+                // Add this square to the clicked squares list for next rotation
+                if !clickedSquares.contains(square) {
+                    clickedSquares.append(square)
+                }
+                break
+            }
+        }
+    }
+    
+    // Process clicked squares and add their cells to rotation with target rotations
+    private func processClickedSquares() -> [[CellPosition]] {
+        var squaresToRotate: [[CellPosition]] = []
+        
+        for square in clickedSquares {
+            // Add all cells in the square to rotation
+            squaresToRotate.append(square)
+        }
+        
+        // Clear the clicked squares list
+        clickedSquares.removeAll()
+        
+        return squaresToRotate
+    }
+    
+    // Reset an expired pipe's color to blue (used during board reset)
+    private func resetExpiredPipeColor(_ pipe: CellPosition) {
+        guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
+        
+        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+            material.diffuse.contents = UIColor.systemBlue
+        }
+    }
+}
+
+// MARK: - CAAnimationDelegate
+extension GameViewController: CAAnimationDelegate {
+    func animationDidStop(_ anim: CAAnimation, finished flag: Bool) {
+        if flag {
+            // Check if this animation has a completion callback
+            if let completion = anim.value(forKey: "completionCallback") as? () -> Void {
+                completion()
+            }
         }
     }
 }
