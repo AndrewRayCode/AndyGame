@@ -109,6 +109,9 @@ class GameViewController: UIViewController {
     // Track squares that were clicked (to prevent them from turning gray)
     private var clickedSquarePipes: Set<CellPosition> = []
     
+    // Congratulations banner
+    private var congratulationsBanner: UIView?
+    
     // Reset button
     private var resetButton: UIButton!
     
@@ -1000,10 +1003,15 @@ class GameViewController: UIViewController {
                     clickedSquarePipes.insert(squarePipe)
                 }
                 
+                deactivateSquare(square)
+                
                 // Add this square to the clicked squares list for next rotation
                 if !clickedSquares.contains(square) {
                     clickedSquares.append(square)
                 }
+                
+                // Show congratulations banner
+                showCongratulationsBanner()
                 break
             }
         }
@@ -1030,6 +1038,74 @@ class GameViewController: UIViewController {
         
         if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
             material.diffuse.contents = UIColor.systemBlue
+        }
+    }
+    
+    // Show congratulations banner when a square is broken
+    private func showCongratulationsBanner() {
+        // Remove any existing banner
+        congratulationsBanner?.removeFromSuperview()
+        
+        // Create banner view
+        let banner = UIView()
+        banner.backgroundColor = UIColor.white
+        banner.layer.cornerRadius = 12
+        banner.layer.shadowColor = UIColor.black.cgColor
+        banner.layer.shadowOffset = CGSize(width: 0, height: 2)
+        banner.layer.shadowOpacity = 0.3
+        banner.layer.shadowRadius = 4
+        
+        // Create label
+        let label = UILabel()
+        label.text = "Squarebreaker! 🎉"
+        label.font = UIFont.systemFont(ofSize: 18, weight: .bold)
+        label.textColor = UIColor.black
+        label.textAlignment = .center
+        
+        // Add label to banner
+        banner.addSubview(label)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Add banner to view
+        view.addSubview(banner)
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Setup constraints
+        NSLayoutConstraint.activate([
+            // Banner constraints
+            banner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            banner.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: 20),
+            banner.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.8),
+            banner.heightAnchor.constraint(equalToConstant: 50),
+            
+            // Label constraints
+            label.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 20),
+            label.trailingAnchor.constraint(equalTo: banner.trailingAnchor, constant: -20),
+            label.topAnchor.constraint(equalTo: banner.topAnchor, constant: 10),
+            label.bottomAnchor.constraint(equalTo: banner.bottomAnchor, constant: -10)
+        ])
+        
+        // Store reference
+        congratulationsBanner = banner
+        
+        // Animate in
+        banner.alpha = 0
+        banner.transform = CGAffineTransform(translationX: 0, y: 50)
+        
+        UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.7, initialSpringVelocity: 0.5, options: [], animations: {
+            banner.alpha = 1
+            banner.transform = .identity
+        })
+        
+        // Animate out after delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            UIView.animate(withDuration: 0.3, animations: {
+                banner.alpha = 0
+                banner.transform = CGAffineTransform(translationX: 0, y: -30)
+            }, completion: { _ in
+                banner.removeFromSuperview()
+                self.congratulationsBanner = nil
+            })
         }
     }
 }
