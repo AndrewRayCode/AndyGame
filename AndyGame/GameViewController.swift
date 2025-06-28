@@ -618,22 +618,25 @@ class GameViewController: UIViewController {
         expiredSquares.removeAll()
         clickedSquarePipes.removeAll()
         
-        // Create array of all cells in diagonal order (top-right to bottom-left)
+        // Create array of all cells in diagonal order (top-left to bottom-right)
         var diagonalCells: [CellPosition] = []
-        for row in 0..<GRID_ROWS {
-            for col in 0..<GRID_COLS {
-                diagonalCells.append(CellPosition(row: row, col: col))
+        for sum in 0..<(GRID_ROWS + GRID_COLS - 1) {
+            for row in 0..<GRID_ROWS {
+                let col = sum - row
+                if col >= 0 && col < GRID_COLS {
+                    diagonalCells.append(CellPosition(row: row, col: col))
+                }
             }
         }
         
         // Track completion of all reset animations
         var completedAnimations = 0
         let totalAnimations = diagonalCells.count
-        let animationStagger = 0.005
+        let animationStagger = 0.007
         
         // Animate reset with staggered timing
         for (index, cell) in diagonalCells.enumerated() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * animationStagger) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * animationStagger + animationStagger) {
                 self.animateSingleCellReset(
                     cell: cell, 
                     completion: {
@@ -694,6 +697,7 @@ class GameViewController: UIViewController {
         cylinderNode.eulerAngles.y = visualRotation
     }
     
+    // Used by resetBoard()
     private func animateSingleCellReset(cell: CellPosition, completion: @escaping () -> Void) {
         // Find the cylinder node for this position
         guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { 
@@ -711,35 +715,48 @@ class GameViewController: UIViewController {
         rotationStates[cell.row][cell.col] += randomState
         
         // Force a square starting at 1,1 on the board
-        // if cell.row == 1 && cell.col == 1 {
-        //     rotationStates[cell.row][cell.col] = 1
-        // }
-        // if cell.row == 1 && cell.col == 2 {
-        //     rotationStates[cell.row][cell.col] = 2
-        // }
-        // if cell.row == 2 && cell.col == 1 {
-        //     rotationStates[cell.row][cell.col] = 0
-        // }
-        // if cell.row == 2 && cell.col == 2 {
-        //     rotationStates[cell.row][cell.col] = 3
-        // }
+        if cell.row == 1 && cell.col == 1 {
+            rotationStates[cell.row][cell.col] = 1
+        }
+        if cell.row == 1 && cell.col == 2 {
+            rotationStates[cell.row][cell.col] = 2
+        }
+        if cell.row == 2 && cell.col == 1 {
+            rotationStates[cell.row][cell.col] = 0
+        }
+        if cell.row == 2 && cell.col == 2 {
+            rotationStates[cell.row][cell.col] = 3
+        }
         let rotation = rotationStates[cell.row][cell.col]
         
         let visualRotation = Float(rotation) * -Float.pi / 2
         
+        let IN_ANIMATION_TIME = 0.25
+        let OUT_ANIMATION_TIME = 0.25
+        
         // Use springy animation for reset as well
         SCNTransaction.begin()
-        SCNTransaction.animationDuration = 0.5
-        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0)
+        SCNTransaction.animationDuration = IN_ANIMATION_TIME
+        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         
+        // Animate both rotation and y position
         cylinderNode.eulerAngles.y = visualRotation
+        cylinderNode.position.y = cylinderHeight / 2 + cylinderHeight * 2.0
         
         SCNTransaction.commit()
         
-        // Use a timer to ensure the white highlighting lasts for the full duration
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            // Reset to normal blue after the full duration
-            self.animateColorChange(for: cell, to: self.CYLINDER_COLOR, duration: 0.1)
+        // Use a timer to ensure the highlighting lasts for the full duration
+        DispatchQueue.main.asyncAfter(deadline: .now() + IN_ANIMATION_TIME) {
+            // Reset to normal blue and position after the full duration
+            self.animateColorChange(for: cell, to: self.CYLINDER_COLOR, duration: OUT_ANIMATION_TIME)
+            
+            // Animate back to original position
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = OUT_ANIMATION_TIME
+            SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            cylinderNode.position.y = self.cylinderHeight / 2
+            SCNTransaction.commit()
+            
             completion()
         }
     }
@@ -1089,11 +1106,13 @@ class GameViewController: UIViewController {
     // Turn a pipe green to indicate it's clickable
     private func turnPipeGreen(_ pipe: CellPosition) {
         animateColorChange(for: pipe, to: UIColor.systemGreen, duration: 0.2)
+        animateCellYPosition(for: pipe, towardCamera: true, duration: 0.3)
     }
     
     // Turn a pipe gray to indicate it's expired
     private func turnPipeGray(_ pipe: CellPosition) {
         animateColorChange(for: pipe, to: UIColor.gray, duration: 0.3)
+        animateCellYPosition(for: pipe, towardCamera: false, duration: 0.3)
     }
     
     // Highlight a pipe as rotating (pink color)
@@ -1131,6 +1150,9 @@ class GameViewController: UIViewController {
                 animateColorChange(for: pipe, to: CYLINDER_COLOR, duration: 0.2)
             }
         }
+        
+        // Animate back to original position
+        animateCellYPosition(for: pipe, towardCamera: false, duration: 0.3)
     }
     
     // Handle click on a square pipe during rotation
@@ -1213,7 +1235,7 @@ class GameViewController: UIViewController {
         banner.layer.shadowColor = UIColor.black.cgColor
         banner.layer.shadowOffset = CGSize(width: 0, height: 2)
         banner.layer.shadowOpacity = 0.3
-        banner.layer.shadowRadius = 4
+        banner.layer.shadowRadius = 12
         
         // Create label
         let label = UILabel()
@@ -1300,6 +1322,7 @@ class GameViewController: UIViewController {
     // Highlight a cell for last chance mechanic
     private func highlightLastChanceCell(_ cell: CellPosition) {
         animateColorChange(for: cell, to: UIColor.systemOrange, duration: 0.3)
+        animateCellYPosition(for: cell, towardCamera: true, duration: 0.3)
     }
     
     // Clear last chance highlight
@@ -1308,6 +1331,9 @@ class GameViewController: UIViewController {
         
         // Reset the cell color
         resetPipeColor(cell)
+        
+        // Animate back to original position
+        animateCellYPosition(for: cell, towardCamera: false, duration: 0.3)
         
         // Clear tracking
         lastChanceCell = nil
@@ -1469,7 +1495,7 @@ class GameViewController: UIViewController {
         }
     }
     
-    // Animate a single cell randomization
+    // Used by last chance
     private func animateSingleCellRandomization(cell: CellPosition, completion: @escaping () -> Void) {
         // Find the cylinder node for this position
         guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { 
@@ -1489,19 +1515,32 @@ class GameViewController: UIViewController {
         let rotation = rotationStates[cell.row][cell.col]
         let visualRotation = Float(rotation) * -Float.pi / 2
         
+        let ANIMATE_IN_DURATION = 0.25
+        let ANIMATE_OUT_DURATION = 0.25
+        
         // Use springy animation for randomization
         SCNTransaction.begin()
-        SCNTransaction.animationDuration = ROTATION_DURATION
-        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0)
+        SCNTransaction.animationDuration = ANIMATE_IN_DURATION
+        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         
+        // Animate both rotation and y position
         cylinderNode.eulerAngles.y = visualRotation
+        cylinderNode.position.y = cylinderHeight / 2 + cylinderHeight * 2.0
         
         SCNTransaction.commit()
         
         // Use a timer to ensure the white highlighting lasts for the full duration
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            // Reset to normal blue after the full duration
-            self.animateColorChange(for: cell, to: self.CYLINDER_COLOR, duration: 0.1)
+        DispatchQueue.main.asyncAfter(deadline: .now() + ANIMATE_IN_DURATION) {
+            // Reset to normal blue and position after the full duration
+            self.animateColorChange(for: cell, to: self.CYLINDER_COLOR, duration: ANIMATE_OUT_DURATION)
+            
+            // Animate back to original position
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = ANIMATE_OUT_DURATION
+            SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            cylinderNode.position.y = self.cylinderHeight / 2
+            SCNTransaction.commit()
+            
             completion()
         }
     }
@@ -1526,6 +1565,21 @@ class GameViewController: UIViewController {
             
             SCNTransaction.commit()
         }
+    }
+
+    // Animate cell y position toward or away from camera
+    private func animateCellYPosition(for cell: CellPosition, towardCamera: Bool, duration: TimeInterval = 0.3) {
+        guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { return }
+        
+        let targetY: Float = towardCamera ? cylinderHeight / 2 + cylinderHeight : cylinderHeight / 2
+        
+        SCNTransaction.begin()
+        SCNTransaction.animationDuration = duration
+        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        
+        cylinderNode.position.y = targetY
+        
+        SCNTransaction.commit()
     }
 }
 
