@@ -96,9 +96,15 @@ class GameViewController: UIViewController {
     private var squarePipeGreenTimers: [String: Timer] = [:]
     private var squarePipeStartTime: Date?
 
+    private let CYLINDER_COLOR = UIColor(red: 0.1, green: 0.6, blue: 1.0, alpha: 1.0)
+    private let CYLINDER_COLOR_HIGHLIGHT = UIColor(red: 0.2, green: 0.7, blue: 1.0, alpha: 1.0)
+
     private let SQUARE_CLICK_MIN_WAIT = 1.0
     private let SQUARE_CLICK_MAX_WAIT = 2.0
     private let SQAURE_CLICK_TIMEOUT = 5.0
+    
+    private let LAST_CHANCE_TIME = 5.0
+    private let ROTATION_DURATION = 0.3
     
     // Track clicked squares for next rotation
     private var clickedSquares: [[CellPosition]] = []
@@ -111,6 +117,10 @@ class GameViewController: UIViewController {
     
     // Track squares that contain cells used as rotation starters (to prevent them from becoming clickable)
     private var squaresWithStarterCells: Set<String> = []
+    
+    // Last chance mechanic tracking
+    private var lastChanceCell: CellPosition?
+    private var lastChanceTimer: Timer?
     
     // Congratulations banner
     private var congratulationsBanner: UIView?
@@ -125,12 +135,23 @@ class GameViewController: UIViewController {
     private var currentScore: Int = 0
     private var highScore: Int = 0
     
+    // Move tracking
+    private let maxMovesPerGame: Int = 5
+    private var remainingMoves: Int = 0
+    
     // Score display labels
     private var currentScoreLabel: UILabel!
     private var highScoreLabel: UILabel!
     
+    // Move counter label
+    private var movesLabel: UILabel!
+    
     var scene: SCNScene!
     var gridGroupNode: SCNNode!
+    
+    // Generic banner system
+    private var activeBanners: [UIView] = []
+    private var bannerContainer: UIView?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -295,6 +316,12 @@ class GameViewController: UIViewController {
         
         // Create and setup score display
         setupScoreDisplay()
+        
+        // Initialize moves display
+        updateMovesDisplay()
+        
+        // Setup banner container
+        setupBannerContainer()
     }
     
     @objc
@@ -333,10 +360,26 @@ class GameViewController: UIViewController {
                 return
             }
             
-            // Normal pipe click - only allow if not rotating
-            if isRotating {
+            // Check if this is a last chance cell click
+            if let lastChanceCell = lastChanceCell, position == lastChanceCell {
+                // Handle last chance cell click
+                handleLastChanceClick(position)
                 return
             }
+            
+            // Normal pipe click - only allow if not rotating and has moves remaining
+            if isRotating || remainingMoves <= 0 {
+                return
+            }
+            
+            // If there's an active last chance timer, clear it and start new rotation
+            if lastChanceTimer != nil {
+                clearLastChance()
+            }
+            
+            // Decrement remaining moves
+            remainingMoves -= 1
+            updateMovesDisplay()
             
             // Reset current score when a cylinder is tapped
             resetCurrentScore()
@@ -521,12 +564,17 @@ class GameViewController: UIViewController {
             
             // Stop square pipe interaction when rotation ends
             stopSquarePipeInteraction()
+            
+            // 10% chance to trigger last chance mechanic
+            if Int.random(in: 1...10) > 1 {
+                triggerLastChance()
+            }
         }
     }
     
     private func setupResetButton() {
         resetButton = UIButton(type: .system)
-        resetButton.setTitle("Reset Board", for: .normal)
+        resetButton.setTitle("New Game", for: .normal)
         resetButton.setTitleColor(.white, for: .normal)
         resetButton.backgroundColor = UIColor.systemBlue
         resetButton.layer.cornerRadius = 8
@@ -558,6 +606,10 @@ class GameViewController: UIViewController {
         
         // Disable interactions during reset
         isRotating = true
+        
+        // Reset move counter
+        remainingMoves = maxMovesPerGame
+        updateMovesDisplay()
         
         // Clear expired squares and reset their colors
         for pipe in expiredSquares {
@@ -594,6 +646,16 @@ class GameViewController: UIViewController {
                 )
             }
         }
+        
+        // Clear starter cell tracking when rotation ends
+        squaresWithStarterCells.removeAll()
+        
+        // Clear any active last chance timer
+        lastChanceTimer?.invalidate()
+        lastChanceTimer = nil
+        lastChanceCell = nil
+        
+        squarePipeStartTime = nil
     }
 
     // Animate a pipe rotation with spring physics
@@ -631,6 +693,17 @@ class GameViewController: UIViewController {
     }
     
     private func animateSingleCellReset(cell: CellPosition, completion: @escaping () -> Void) {
+        // Find the cylinder node for this position
+        guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { 
+            completion()
+            return 
+        }
+        
+        // Highlight cell during reset
+        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+            material.diffuse.contents = CYLINDER_COLOR_HIGHLIGHT
+        }
+        
         // Randomise rotation stat
         let randomState = Int.random(in: 0...3)
         rotationStates[cell.row][cell.col] += randomState
@@ -650,12 +723,6 @@ class GameViewController: UIViewController {
         }
         let rotation = rotationStates[cell.row][cell.col]
         
-        // Find the cylinder node for this position
-        guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { 
-            completion()
-            return 
-        }
-        
         let visualRotation = Float(rotation) * -Float.pi / 2
         
         // Use springy animation for reset as well
@@ -663,19 +730,16 @@ class GameViewController: UIViewController {
         SCNTransaction.animationDuration = 0.5
         SCNTransaction.animationTimingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0)
         
-        // Set the completion block
-        SCNTransaction.completionBlock = {
-            completion()
-        }
-        
         cylinderNode.eulerAngles.y = visualRotation
         
-        // Reset material color
-        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
-            material.diffuse.contents = UIColor.systemBlue
-        }
-        
         SCNTransaction.commit()
+        
+        // Use a timer to ensure the white highlighting lasts for the full duration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            // Reset to normal blue after the full duration
+            self.animateColorChange(for: cell, to: self.CYLINDER_COLOR, duration: 0.1)
+            completion()
+        }
     }
     
     
@@ -694,23 +758,50 @@ class GameViewController: UIViewController {
         currentScoreLabel.layer.masksToBounds = true
         currentScoreLabel.textAlignment = .center
         
-        // Create high score label
+        // Create high score container view
+        let highScoreContainer = UIView()
+        highScoreContainer.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        highScoreContainer.layer.cornerRadius = 8
+        highScoreContainer.layer.masksToBounds = true
+        
+        // Create high score text label
+        let highScoreTextLabel = UILabel()
+        highScoreTextLabel.text = "High Score"
+        highScoreTextLabel.textColor = .white
+        highScoreTextLabel.font = UIFont.systemFont(ofSize: 14, weight: .medium)
+        highScoreTextLabel.textAlignment = .center
+        
+        // Create high score number label
         highScoreLabel = UILabel()
-        highScoreLabel.text = "High Score: 0"
-        highScoreLabel.textColor = .white
-        highScoreLabel.font = UIFont.systemFont(ofSize: 16, weight: .medium)
-        highScoreLabel.backgroundColor = UIColor.black.withAlphaComponent(0.7)
-        highScoreLabel.layer.cornerRadius = 8
-        highScoreLabel.layer.masksToBounds = true
+        highScoreLabel.text = "0"
+        highScoreLabel.textColor = UIColor.systemYellow
+        highScoreLabel.font = UIFont.systemFont(ofSize: 20, weight: .bold)
         highScoreLabel.textAlignment = .center
         
-        // Add to view
+        // Add labels to container
+        highScoreContainer.addSubview(highScoreTextLabel)
+        highScoreContainer.addSubview(highScoreLabel)
+        
+        // Create moves label
+        movesLabel = UILabel()
+        movesLabel.text = "Moves: 10"
+        movesLabel.textColor = .white
+        movesLabel.font = UIFont.systemFont(ofSize: 16, weight: .medium)
+        movesLabel.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        movesLabel.layer.cornerRadius = 8
+        movesLabel.layer.masksToBounds = true
+        movesLabel.textAlignment = .center
+        
         view.addSubview(currentScoreLabel)
-        view.addSubview(highScoreLabel)
+        view.addSubview(highScoreContainer)
+        view.addSubview(movesLabel)
         
         // Setup constraints
         currentScoreLabel.translatesAutoresizingMaskIntoConstraints = false
+        highScoreContainer.translatesAutoresizingMaskIntoConstraints = false
+        highScoreTextLabel.translatesAutoresizingMaskIntoConstraints = false
         highScoreLabel.translatesAutoresizingMaskIntoConstraints = false
+        movesLabel.translatesAutoresizingMaskIntoConstraints = false
         
         NSLayoutConstraint.activate([
             // Current score label
@@ -719,11 +810,29 @@ class GameViewController: UIViewController {
             currentScoreLabel.widthAnchor.constraint(equalToConstant: 120),
             currentScoreLabel.heightAnchor.constraint(equalToConstant: 30),
             
-            // High score label
-            highScoreLabel.topAnchor.constraint(equalTo: currentScoreLabel.bottomAnchor, constant: 8),
-            highScoreLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
-            highScoreLabel.widthAnchor.constraint(equalToConstant: 120),
-            highScoreLabel.heightAnchor.constraint(equalToConstant: 25)
+            // High score container
+            highScoreContainer.topAnchor.constraint(equalTo: currentScoreLabel.bottomAnchor, constant: 8),
+            highScoreContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            highScoreContainer.widthAnchor.constraint(equalToConstant: 120),
+            highScoreContainer.heightAnchor.constraint(equalToConstant: 50),
+            
+            // Moves label
+            movesLabel.topAnchor.constraint(equalTo: highScoreContainer.bottomAnchor, constant: 8),
+            movesLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
+            movesLabel.widthAnchor.constraint(equalToConstant: 120),
+            movesLabel.heightAnchor.constraint(equalToConstant: 30),
+            
+            // High score text label
+            highScoreTextLabel.topAnchor.constraint(equalTo: highScoreContainer.topAnchor, constant: 5),
+            highScoreTextLabel.leadingAnchor.constraint(equalTo: highScoreContainer.leadingAnchor, constant: 5),
+            highScoreTextLabel.trailingAnchor.constraint(equalTo: highScoreContainer.trailingAnchor, constant: -5),
+            highScoreTextLabel.heightAnchor.constraint(equalToConstant: 20),
+            
+            // High score number label
+            highScoreLabel.topAnchor.constraint(equalTo: highScoreTextLabel.bottomAnchor, constant: 2),
+            highScoreLabel.leadingAnchor.constraint(equalTo: highScoreContainer.leadingAnchor, constant: 5),
+            highScoreLabel.trailingAnchor.constraint(equalTo: highScoreContainer.trailingAnchor, constant: -5),
+            highScoreLabel.bottomAnchor.constraint(equalTo: highScoreContainer.bottomAnchor, constant: -5)
         ])
         
         updateScoreDisplay()
@@ -731,7 +840,19 @@ class GameViewController: UIViewController {
     
     private func updateScoreDisplay() {
         currentScoreLabel.text = "Score: \(currentScore)"
-        highScoreLabel.text = "High Score: \(highScore)"
+        highScoreLabel.text = "\(highScore)"
+    }
+    
+    private func updateMovesDisplay() {
+        guard let movesLabel = movesLabel else { return }
+        
+        if remainingMoves > 0 {
+            movesLabel.text = "Moves: \(remainingMoves)"
+            movesLabel.textColor = .white
+        } else {
+            movesLabel.text = "No moves remaining"
+            movesLabel.textColor = UIColor.systemRed
+        }
     }
     
     private func addToScore(_ points: Int) {
@@ -955,20 +1076,12 @@ class GameViewController: UIViewController {
     
     // Turn a pipe green to indicate it's clickable
     private func turnPipeGreen(_ pipe: CellPosition) {
-        guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
-        
-        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
-            material.diffuse.contents = UIColor.systemGreen
-        }
+        animateColorChange(for: pipe, to: UIColor.systemGreen, duration: 0.2)
     }
     
     // Turn a pipe gray to indicate it's expired
     private func turnPipeGray(_ pipe: CellPosition) {
-        guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
-        
-        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
-            material.diffuse.contents = UIColor.gray
-        }
+        animateColorChange(for: pipe, to: UIColor.gray, duration: 0.3)
     }
     
     // Highlight a pipe as rotating (pink color)
@@ -980,9 +1093,10 @@ class GameViewController: UIViewController {
             if originalMaterials[cylinderNode] == nil {
                 // Store the true original color (blue) regardless of current color
                 let originalMaterial = material.copy() as? SCNMaterial
-                originalMaterial?.diffuse.contents = UIColor.systemBlue
+                originalMaterial?.diffuse.contents = CYLINDER_COLOR
                 originalMaterials[cylinderNode] = originalMaterial
             }
+            // Use instant color change for rotation highlighting to prevent pulsing
             material.diffuse.contents = UIColor.systemPink
         }
     }
@@ -999,10 +1113,10 @@ class GameViewController: UIViewController {
         if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
             // Check if this pipe was in the original materials (pink during rotation)
             if let originalMaterial = originalMaterials[cylinderNode] {
-                material.diffuse.contents = originalMaterial.diffuse.contents
+                animateColorChange(for: pipe, to: originalMaterial.diffuse.contents as? UIColor ?? CYLINDER_COLOR, duration: 0.2)
             } else {
                 // Reset to default blue
-                material.diffuse.contents = UIColor.systemBlue
+                animateColorChange(for: pipe, to: CYLINDER_COLOR, duration: 0.2)
             }
         }
     }
@@ -1028,10 +1142,25 @@ class GameViewController: UIViewController {
                 }
                 
                 // Show congratulations banner
-                showCongratulationsBanner()
+                showBanner(message: "Squarebreaker! 🎉")
                 break
             }
         }
+    }
+    
+    // Handle click on last chance cell
+    private func handleLastChanceClick(_ cell: CellPosition) {
+        // Clear the last chance timer and highlight
+        clearLastChance()
+        
+        // Add bonus points
+        addToScore(10)
+        
+        // Show success banner
+        showBanner(message: "Last Chance! +10 points! 🎯")
+        
+        // Trigger radius randomization around the clicked cell
+        randomizeRadiusAroundCell(cell)
     }
     
     // Process clicked squares and add their cells to rotation with target rotations
@@ -1051,11 +1180,7 @@ class GameViewController: UIViewController {
     
     // Reset an expired pipe's color to blue (used during board reset)
     private func resetExpiredPipeColor(_ pipe: CellPosition) {
-        guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
-        
-        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
-            material.diffuse.contents = UIColor.systemBlue
-        }
+        animateColorChange(for: pipe, to: CYLINDER_COLOR, duration: 0.3)
     }
     
     // Show congratulations banner when a square is broken
@@ -1132,6 +1257,256 @@ class GameViewController: UIViewController {
         for cell in cells {
             let cellKey = "\(cell.row)_\(cell.col)"
             squaresWithStarterCells.insert(cellKey)
+        }
+    }
+    
+    // Trigger last chance mechanic
+    private func triggerLastChance() {
+        // Select a random cell on the board
+        let randomRow = Int.random(in: 1..<GRID_ROWS-1)
+        let randomCol = Int.random(in: 1..<GRID_COLS-1)
+        let randomCell = CellPosition(row: randomRow, col: randomCol)
+        
+        // Store the last chance cell
+        lastChanceCell = randomCell
+        
+        // Highlight the cell (use a distinct color like orange)
+        highlightLastChanceCell(randomCell)
+        
+        // Set up timer to clear the highlight after LAST_CHANCE_TIME seconds
+        lastChanceTimer = Timer.scheduledTimer(withTimeInterval: LAST_CHANCE_TIME, repeats: false) { [weak self] _ in
+            self?.clearLastChance()
+        }
+    }
+    
+    // Highlight a cell for last chance mechanic
+    private func highlightLastChanceCell(_ cell: CellPosition) {
+        animateColorChange(for: cell, to: UIColor.systemOrange, duration: 0.3)
+    }
+    
+    // Clear last chance highlight
+    private func clearLastChance() {
+        guard let cell = lastChanceCell else { return }
+        
+        // Reset the cell color
+        resetPipeColor(cell)
+        
+        // Clear tracking
+        lastChanceCell = nil
+        lastChanceTimer = nil
+    }
+    
+    // Setup banner container for stacking multiple banners
+    private func setupBannerContainer() {
+        bannerContainer = UIView()
+        bannerContainer?.backgroundColor = UIColor.clear
+        bannerContainer?.translatesAutoresizingMaskIntoConstraints = false
+        
+        if let container = bannerContainer {
+            view.addSubview(container)
+            
+            NSLayoutConstraint.activate([
+                container.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: 20),
+                container.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.8),
+                container.heightAnchor.constraint(greaterThanOrEqualToConstant: 50)
+            ])
+        }
+    }
+    
+    // Generic banner display function
+    private func showBanner(message: String, duration: TimeInterval = 2.0) {
+        guard let container = bannerContainer else { return }
+        
+        // Create banner view
+        let banner = UIView()
+        banner.backgroundColor = UIColor.white
+        banner.layer.cornerRadius = 12
+        banner.layer.shadowColor = UIColor.black.cgColor
+        banner.layer.shadowOffset = CGSize(width: 0, height: 2)
+        banner.layer.shadowOpacity = 0.3
+        banner.layer.shadowRadius = 4
+        
+        // Create label
+        let label = UILabel()
+        label.text = message
+        label.font = UIFont.systemFont(ofSize: 18, weight: .bold)
+        label.textColor = UIColor.black
+        label.textAlignment = .center
+        label.numberOfLines = 0
+        
+        // Add label to banner
+        banner.addSubview(label)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Add banner to container
+        container.addSubview(banner)
+        banner.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Add to active banners array
+        activeBanners.append(banner)
+        
+        // Setup constraints
+        NSLayoutConstraint.activate([
+            // Banner constraints
+            banner.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            banner.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            banner.heightAnchor.constraint(equalToConstant: 50),
+            
+            // Label constraints
+            label.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 20),
+            label.trailingAnchor.constraint(equalTo: banner.trailingAnchor, constant: -20),
+            label.topAnchor.constraint(equalTo: banner.topAnchor, constant: 10),
+            label.bottomAnchor.constraint(equalTo: banner.bottomAnchor, constant: -10)
+        ])
+        
+        // Position banner at the bottom of the stack
+        if activeBanners.count > 1 {
+            // Position above the previous banner
+            let previousBanner = activeBanners[activeBanners.count - 2]
+            banner.bottomAnchor.constraint(equalTo: previousBanner.topAnchor, constant: -10).isActive = true
+        } else {
+            // First banner - position at bottom of container
+            banner.bottomAnchor.constraint(equalTo: container.bottomAnchor).isActive = true
+        }
+        
+        // Animate in
+        banner.alpha = 0
+        banner.transform = CGAffineTransform(translationX: 0, y: 50)
+        
+        UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.7, initialSpringVelocity: 0.5, options: [], animations: {
+            banner.alpha = 1
+            banner.transform = .identity
+        })
+        
+        // Animate out after delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
+            self.removeBanner(banner)
+        }
+    }
+    
+    // Remove a specific banner
+    private func removeBanner(_ banner: UIView) {
+        UIView.animate(withDuration: 0.3, animations: {
+            banner.alpha = 0
+            banner.transform = CGAffineTransform(translationX: 0, y: -30)
+        }, completion: { _ in
+            banner.removeFromSuperview()
+            if let index = self.activeBanners.firstIndex(of: banner) {
+                self.activeBanners.remove(at: index)
+            }
+        })
+    }
+    
+    // Randomize cells in a radius around a given cell
+    private func randomizeRadiusAroundCell(_ centerCell: CellPosition) {
+        // Calculate radius of board size. This needs to be configurable
+        let radius = max(1, Int(Double(min(GRID_ROWS, GRID_COLS)) * 0.5))
+        
+        // Collect all cells within the radius
+        var cellsInRadius: [CellPosition] = []
+        
+        for row in 0..<GRID_ROWS {
+            for col in 0..<GRID_COLS {
+                let distance = abs(row - centerCell.row) + abs(col - centerCell.col) // Manhattan distance
+                if distance <= radius {
+                    cellsInRadius.append(CellPosition(row: row, col: col))
+                }
+            }
+        }
+        
+        // Sort cells in diagonal pattern (similar to resetBoard)
+        let sortedCells = cellsInRadius.sorted { cell1, cell2 in
+            let sum1 = cell1.row + cell1.col
+            let sum2 = cell2.row + cell2.col
+            if sum1 != sum2 {
+                return sum1 < sum2
+            }
+            return cell1.row < cell2.row
+        }
+        
+        // Disable board interactions during randomization
+        isRotating = true
+        updateResetButtonState()
+        
+        // Track completion of all radius animations
+        var completedAnimations = 0
+        let totalAnimations = sortedCells.count
+        let animationStagger = 0.02 // Slightly faster than resetBoard
+        
+        // Animate radius randomization with staggered timing
+        for (index, cell) in sortedCells.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * animationStagger) {
+                self.animateSingleCellRandomization(
+                    cell: cell, 
+                    completion: {
+                        completedAnimations += 1
+                        if completedAnimations == totalAnimations {
+                            self.isRotating = false
+                            self.updateResetButtonState()
+                        }
+                    }
+                )
+            }
+        }
+    }
+    
+    // Animate a single cell randomization
+    private func animateSingleCellRandomization(cell: CellPosition, completion: @escaping () -> Void) {
+        // Find the cylinder node for this position
+        guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { 
+            completion()
+            return 
+        }
+        
+        // Always highlight the cell white during randomization
+        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+            material.diffuse.contents = CYLINDER_COLOR_HIGHLIGHT
+        }
+        
+        // Randomize rotation state
+        let randomState = Int.random(in: 0...3)
+        rotationStates[cell.row][cell.col] += randomState
+        
+        let rotation = rotationStates[cell.row][cell.col]
+        let visualRotation = Float(rotation) * -Float.pi / 2
+        
+        // Use springy animation for randomization
+        SCNTransaction.begin()
+        SCNTransaction.animationDuration = ROTATION_DURATION
+        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0)
+        
+        cylinderNode.eulerAngles.y = visualRotation
+        
+        SCNTransaction.commit()
+        
+        // Use a timer to ensure the white highlighting lasts for the full duration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            // Reset to normal blue after the full duration
+            self.animateColorChange(for: cell, to: self.CYLINDER_COLOR, duration: 0.1)
+            completion()
+        }
+    }
+
+    // Animate color change for a pipe
+    private func animateColorChange(for cell: CellPosition, to color: UIColor, duration: TimeInterval = 0.3) {
+        guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { return }
+        
+        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+            // Skip animation if the color is already the target color
+            if let currentColor = material.diffuse.contents as? UIColor, currentColor == color {
+                return
+            }
+            
+            // Use SCNTransaction for SceneKit material animations
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = duration
+            SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            
+            // Animate the color change
+            material.diffuse.contents = color
+            
+            SCNTransaction.commit()
         }
     }
 }
