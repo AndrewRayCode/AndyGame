@@ -135,6 +135,15 @@ class GameViewController: UIViewController {
     private var lastChanceCell: CellPosition?
     private var lastChanceTimer: Timer?
     
+    // Square breaking delay tracking
+    private var shouldDelayNextRotation = false
+    
+    // Track previous pipe squares for new square detection
+    private var previousPipeSquares: [[CellPosition]] = []
+    
+    // Track newly formed squares that need to be broken open
+    private var newlyFormedSquares: [[CellPosition]] = []
+    
     // Congratulations banner
     private var congratulationsBanner: UIView?
     
@@ -333,6 +342,9 @@ class GameViewController: UIViewController {
         // Setup banner container
         setupBannerContainer()
         
+        // Initialize previous pipe squares for new square detection
+        previousPipeSquares = []
+        
         // Randomize the initial board state
         resetBoard()
     }
@@ -398,10 +410,6 @@ class GameViewController: UIViewController {
             rotateCells([position], [])
         }
     }
-    
-    /**
-     * Utility functions
-     */
 
     // On initial tap, this rotates the first cell.
     // On subsequent rotation completions, this function is called with the
@@ -526,15 +534,34 @@ class GameViewController: UIViewController {
     }
     
     private func onRotationComplete(rotatedCells: [CellPosition]) {
-        // Restore original materials
-        for (node, originalMaterial) in originalMaterials {
-            if let geometry = node.geometry, let material = geometry.firstMaterial {
-                material.diffuse.contents = originalMaterial.diffuse.contents
+        // Pause for effect in (at least) square breaker
+        let ROTATION_COMPLETION_DELAY = 0.5
+        
+        // Check if we should delay the next rotation step due to square breaking
+        if shouldDelayNextRotation {
+            // Delay the next rotation by 1 second
+            DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_COMPLETION_DELAY) {
+                // Restore original materials
+                for (node, originalMaterial) in self.originalMaterials {
+                    if let geometry = node.geometry, let material = geometry.firstMaterial {
+                        material.diffuse.contents = originalMaterial.diffuse.contents
+                    }
+                }
+            }
+        } else {
+            // Restore original materials
+            for (node, originalMaterial) in self.originalMaterials {
+                if let geometry = node.geometry, let material = geometry.firstMaterial {
+                    material.diffuse.contents = originalMaterial.diffuse.contents
+                }
             }
         }
         
         // Detect pipe squares after rotation
         detectPipeSquares()
+        
+        // Detect newly formed squares
+        detectNewlyFormedSquares()
         
         var newNeighborsToRotate: [CellPosition] = []
         // Find connected neighbors for each rotated cell
@@ -547,16 +574,28 @@ class GameViewController: UIViewController {
              }
         }
         
-        // Process clicked squares and add their cells to rotation
+        // Process clicked squares and add their cells to rotation with target rotations
         let clickedSquareCells = processClickedSquares()
-        // newNeighborsToRotate.append(contentsOf: clickedSquareCells)
+        
+        // Process newly formed squares and add their cells to rotation with target rotations
+        let newlyFormedSquareCells = processNewlyFormedSquares()
         
         // Deduplicate newNeighborsToRotate efficiently using a Set
         let uniqueNeighbors = Array(Set(newNeighborsToRotate))
         
         if uniqueNeighbors.count > 0 {
             addToScore(uniqueNeighbors.count)
-            rotateCells(uniqueNeighbors, clickedSquareCells)
+            
+            // Check if we should delay the next rotation step due to square breaking
+            if shouldDelayNextRotation {
+                shouldDelayNextRotation = false
+                // Delay the next rotation by 1 second
+                DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_COMPLETION_DELAY) {
+                    self.rotateCells(uniqueNeighbors, clickedSquareCells + newlyFormedSquareCells)
+                }
+            } else {
+                rotateCells(uniqueNeighbors, clickedSquareCells + newlyFormedSquareCells)
+            }
         } else {
             isRotating = false
             originalMaterials.removeAll()
@@ -1045,6 +1084,9 @@ class GameViewController: UIViewController {
         clickedSquares.removeAll()
         clickedSquarePipes.removeAll()
         
+        // Clear newly formed squares when rotation ends
+        newlyFormedSquares.removeAll()
+        
         // Clear starter cell tracking when rotation ends
         squaresWithStarterCells.removeAll()
         
@@ -1141,7 +1183,7 @@ class GameViewController: UIViewController {
         
         guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
         
-        if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
+        if let geometry = cylinderNode.geometry {
             // Check if this pipe was in the original materials (pink during rotation)
             if let originalMaterial = originalMaterials[cylinderNode] {
                 animateColorChange(for: pipe, to: originalMaterial.diffuse.contents as? UIColor ?? CYLINDER_COLOR, duration: 0.2)
@@ -1180,6 +1222,9 @@ class GameViewController: UIViewController {
                 if !clickedSquares.contains(square) {
                     clickedSquares.append(square)
                 }
+                
+                // Set delay flag for next rotation step
+                shouldDelayNextRotation = true
                 
                 // Show congratulations banner
                 showBanner(message: "Squarebreaker! 🎉")
@@ -1220,6 +1265,21 @@ class GameViewController: UIViewController {
         
         // Clear the clicked squares list
         clickedSquares.removeAll()
+        
+        return squaresToRotate
+    }
+    
+    // Process newly formed squares and add their cells to rotation with target rotations
+    private func processNewlyFormedSquares() -> [[CellPosition]] {
+        var squaresToRotate: [[CellPosition]] = []
+        
+        for square in newlyFormedSquares {
+            // Add all cells in the square to rotation
+            squaresToRotate.append(square)
+        }
+        
+        // Clear the newly formed squares list
+        newlyFormedSquares.removeAll()
         
         return squaresToRotate
     }
@@ -1586,6 +1646,47 @@ class GameViewController: UIViewController {
         cylinderNode.position.y = targetY
         
         SCNTransaction.commit()
+    }
+
+    // Detect newly formed squares
+    // HAS AN IMPLICIT DEPENDENCY ON detectPipeSquares()
+    // The logic in this class is a mix of mutating global game state and
+    // functions that return values!
+    private func detectNewlyFormedSquares() {
+        // Find squares that exist now but didn't exist before
+        for newSquare in pipeSquares {
+            let isNewSquare = !previousPipeSquares.contains { oldSquare in
+                // Check if this square is the same as any previous square
+                return newSquare.count == oldSquare.count && 
+                       newSquare.allSatisfy { cell in oldSquare.contains(cell) }
+            }
+            
+            if isNewSquare {
+                // Check if any cells in this square were rotated in the current step
+                let rotatedCellPositions = Set(currentRotatingCells)
+                let squareCellPositions = Set(newSquare)
+                let hasRotatedCells = !rotatedCellPositions.isDisjoint(with: squareCellPositions)
+                
+                if hasRotatedCells {
+                    // Highlight the newly formed square in gold
+                    for cell in newSquare {
+                        animateColorChange(for: cell, to: UIColor.systemYellow, duration: 0.3)
+                    }
+                    
+                    // Add to newly formed squares list for next rotation
+                    newlyFormedSquares.append(newSquare)
+                    
+                    // Set delay flag for next rotation step
+                    shouldDelayNextRotation = true
+                    
+                    showBanner(message: "Squareformer! 🔲")
+                    break // Only process one new square per rotation
+                }
+            }
+        }
+        
+        // Update previous squares for next comparison
+        previousPipeSquares = pipeSquares
     }
 }
 
