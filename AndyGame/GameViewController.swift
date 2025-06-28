@@ -109,6 +109,9 @@ class GameViewController: UIViewController {
     // Track squares that were clicked (to prevent them from turning gray)
     private var clickedSquarePipes: Set<CellPosition> = []
     
+    // Track squares that contain cells used as rotation starters (to prevent them from becoming clickable)
+    private var squaresWithStarterCells: Set<String> = []
+    
     // Congratulations banner
     private var congratulationsBanner: UIView?
     
@@ -355,6 +358,9 @@ class GameViewController: UIViewController {
         isRotating = true
         updateResetButtonState()
         detectPipeSquares()
+        
+        // Track squares that contain starter cells (cells that initiated this rotation)
+        trackSquaresWithStarterCells(cells)
         
         // Start square pipe interaction system only if not already started
         if squarePipeStartTime == nil {
@@ -889,6 +895,9 @@ class GameViewController: UIViewController {
         clickedSquares.removeAll()
         clickedSquarePipes.removeAll()
         
+        // Clear starter cell tracking when rotation ends
+        squaresWithStarterCells.removeAll()
+        
         squarePipeStartTime = nil
     }
     
@@ -896,6 +905,14 @@ class GameViewController: UIViewController {
     private func activateSquare(_ square: [CellPosition]) {
         // Only activate if still rotating
         guard isRotating else { return }
+        
+        // Check if this square contains any starter cells - if so, skip activation
+        for pipe in square {
+            let cellKey = "\(pipe.row)_\(pipe.col)"
+            if squaresWithStarterCells.contains(cellKey) {
+                return // Skip this square - it contains a starter cell
+            }
+        }
         
         // Add all pipes in the square to clickable set
         for pipe in square {
@@ -1106,6 +1123,15 @@ class GameViewController: UIViewController {
                 banner.removeFromSuperview()
                 self.congratulationsBanner = nil
             })
+        }
+    }
+    
+    // Track squares that contain starter cells (cells that initiated this rotation)
+    private func trackSquaresWithStarterCells(_ cells: [CellPosition]) {
+        squaresWithStarterCells.removeAll()
+        for cell in cells {
+            let cellKey = "\(cell.row)_\(cell.col)"
+            squaresWithStarterCells.insert(cellKey)
         }
     }
 }
