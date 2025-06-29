@@ -556,18 +556,24 @@ class GameViewController: UIViewController {
         if shouldDelayNextRotation {
             // Delay the next rotation by 1 second
             DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_COMPLETION_DELAY) {
-                // Restore original materials
+                // Restore original materials only for pipes that are no longer rotating
                 for (node, originalMaterial) in self.originalMaterials {
-                    if let geometry = node.geometry, let material = geometry.firstMaterial {
-                        material.diffuse.contents = originalMaterial.diffuse.contents
+                    // Only restore if this node is not still rotating
+                    if let position = self.cylinderNodes[node], !self.currentRotatingCells.contains(position) {
+                        if let geometry = node.geometry, let material = geometry.firstMaterial {
+                            material.diffuse.contents = originalMaterial.diffuse.contents
+                        }
                     }
                 }
             }
         } else {
-            // Restore original materials
+            // Restore original materials only for pipes that are no longer rotating
             for (node, originalMaterial) in self.originalMaterials {
-                if let geometry = node.geometry, let material = geometry.firstMaterial {
-                    material.diffuse.contents = originalMaterial.diffuse.contents
+                // Only restore if this node is not still rotating
+                if let position = self.cylinderNodes[node], !self.currentRotatingCells.contains(position) {
+                    if let geometry = node.geometry, let material = geometry.firstMaterial {
+                        material.diffuse.contents = originalMaterial.diffuse.contents
+                    }
                 }
             }
         }
