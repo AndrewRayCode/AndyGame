@@ -118,6 +118,7 @@ class GameViewController: UIViewController {
     
     private let LAST_CHANCE_TIME = 5.0
     private let ROTATION_DURATION = 0.3
+    private let FLOWER_CLICK_MAX_WAIT = 3.0
     
     // Track clicked squares for next rotation
     private var clickedSquares: [[CellPosition]] = []
@@ -144,11 +145,30 @@ class GameViewController: UIViewController {
     // Track newly formed squares that need to be broken open
     private var newlyFormedSquares: [[CellPosition]] = []
     
+    // Flower pattern tracking
+    private var flowerFormationTimer: Timer?
+    
+    // Flower interaction tracking
+    private var activeFlower: (area: (startRow: Int, startCol: Int), previousRotations: [[Int]], timer: Timer)?
+    private var clickableFlowerCells: Set<CellPosition> = []
+    private var flowerCellsToRotate: [CellPosition] = []
+    
+    // Flower rotation pattern (4x4 grid)
+    private let flowerPattern: [[Int?]] = [
+        [nil, 1, 2, nil],      // [don't rotate, .one, .two, don't rotate]
+        [1, 3, 0, 2],          // [.one, .three, .zero, .two]
+        [0, 2, 1, 3],          // [.zero, .two, .one, .three]
+        [nil, 0, 3, nil]       // [don't rotate, .zero, .three, don't rotate]
+    ]
+    
     // Congratulations banner
     private var congratulationsBanner: UIView?
     
     // Reset button
     private var resetButton: UIButton!
+    
+    // Flower test button
+    private var flowerTestButton: UIButton!
     
     // Camera node reference
     private var cameraNode: SCNNode!
@@ -392,6 +412,20 @@ class GameViewController: UIViewController {
                 return
             }
             
+            // Check if it's a flower cell
+            if clickableFlowerCells.contains(position) {
+                // User clicked the flower in time!
+                showBanner(message: "Flower breaker!")
+
+                // Pop the flower open with the specified pattern
+                popFlowerOpen(area: activeFlower!.area)
+
+                // Clear the active flower
+                clearActiveFlower()
+                
+                return
+            }
+            
             // Normal pipe click - only allow if not rotating and has moves remaining
             if isRotating || remainingMoves <= 0 {
                 return
@@ -426,6 +460,11 @@ class GameViewController: UIViewController {
         // Start square pipe interaction system only if not already started
         if squarePipeStartTime == nil {
             startSquarePipeInteraction()
+        }
+        
+        // 1 in 10 chance to trigger flower formation
+        if Int.random(in: 1...10) == 1 {
+            triggerFlowerFormation()
         }
         
         // Pop open the square
@@ -556,7 +595,8 @@ class GameViewController: UIViewController {
         if shouldDelayNextRotation {
             // Delay the next rotation by 1 second
             DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_COMPLETION_DELAY) {
-                // Don't restore materials here - let the next rotation step handle it
+                // Continue the rotation chain after the delay
+                self.rotateCells(rotatedCells, clickedSquareCells + newlyFormedSquareCells)
             }
         } else {
             // Restore all original materials when rotation chain is completely finished
@@ -590,21 +630,26 @@ class GameViewController: UIViewController {
         // Process newly formed squares and add their cells to rotation with target rotations
         let newlyFormedSquareCells = processNewlyFormedSquares()
         
+        // Process flower cells that need to be rotated
+        let flowerCellsForRotation = flowerCellsToRotate
+        flowerCellsToRotate.removeAll() // Clear for next time
+        
         // Deduplicate newNeighborsToRotate efficiently using a Set
         let uniqueNeighbors = Array(Set(newNeighborsToRotate))
         
-        if uniqueNeighbors.count > 0 {
-            addToScore(uniqueNeighbors.count)
+        let allCellsToRotate = uniqueNeighbors + flowerCellsForRotation
+        if allCellsToRotate.count > 0 {
+            addToScore(allCellsToRotate.count)
             
             // Check if we should delay the next rotation step due to square breaking
             if shouldDelayNextRotation {
                 shouldDelayNextRotation = false
                 // Delay the next rotation by 1 second
                 DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_COMPLETION_DELAY) {
-                    self.rotateCells(uniqueNeighbors, clickedSquareCells + newlyFormedSquareCells)
+                    self.rotateCells(allCellsToRotate, clickedSquareCells + newlyFormedSquareCells)
                 }
             } else {
-                rotateCells(uniqueNeighbors, clickedSquareCells + newlyFormedSquareCells)
+                rotateCells(allCellsToRotate, clickedSquareCells + newlyFormedSquareCells)
             }
         } else {
             isRotating = false
@@ -613,6 +658,14 @@ class GameViewController: UIViewController {
             
             // Stop square pipe interaction when rotation ends
             stopSquarePipeInteraction()
+            
+            // Clear any remaining flower cells that need rotation
+            flowerCellsToRotate.removeAll()
+            
+            // Reset any clickable flowers when rotations have stopped
+            if activeFlower != nil {
+                clearActiveFlower()
+            }
             
             // Chance to trigger last chance mechanic
             if Int.random(in: 1...10) > 8 && remainingMoves < 4 {
@@ -630,16 +683,35 @@ class GameViewController: UIViewController {
         resetButton.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .medium)
         resetButton.addTarget(self, action: #selector(resetBoard), for: .touchUpInside)
         
-        // Add button to view
+        // Create flower test button
+        flowerTestButton = UIButton(type: .system)
+        flowerTestButton.setTitle("Flower Test", for: .normal)
+        flowerTestButton.setTitleColor(.white, for: .normal)
+        flowerTestButton.backgroundColor = UIColor.systemPurple
+        flowerTestButton.layer.cornerRadius = 8
+        flowerTestButton.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .medium)
+        flowerTestButton.addTarget(self, action: #selector(testFlowerFormation), for: .touchUpInside)
+        
+        // Add buttons to view
         view.addSubview(resetButton)
+        view.addSubview(flowerTestButton)
         
         // Setup constraints
         resetButton.translatesAutoresizingMaskIntoConstraints = false
+        flowerTestButton.translatesAutoresizingMaskIntoConstraints = false
+        
         NSLayoutConstraint.activate([
+            // Reset button
             resetButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
             resetButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
             resetButton.widthAnchor.constraint(equalToConstant: 120),
-            resetButton.heightAnchor.constraint(equalToConstant: 44)
+            resetButton.heightAnchor.constraint(equalToConstant: 44),
+            
+            // Flower test button
+            flowerTestButton.topAnchor.constraint(equalTo: resetButton.bottomAnchor, constant: 10),
+            flowerTestButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            flowerTestButton.widthAnchor.constraint(equalToConstant: 120),
+            flowerTestButton.heightAnchor.constraint(equalToConstant: 44)
         ])
         
         updateResetButtonState()
@@ -707,9 +779,20 @@ class GameViewController: UIViewController {
         lastChanceTimer = nil
         lastChanceCell = nil
         
-        squarePipeStartTime = nil
+        // Clear any active flower
+        clearActiveFlower()
+        
+        // Clear any flower cells that need rotation
+        flowerCellsToRotate.removeAll()
         
         resetCurrentScore()
+    }
+
+    @objc private func testFlowerFormation() {
+        guard !isRotating else { return }
+        
+        // Manually trigger flower formation for testing
+        triggerFlowerFormation()
     }
 
     // Animate a pipe rotation with spring physics
@@ -1037,6 +1120,21 @@ class GameViewController: UIViewController {
     
     // Check if a 2x2 area forms the specific square pattern
     private func isSquarePattern(at row: Int, col: Int) -> Bool {
+        // Check if any cell in this 2x2 area is part of an active flower
+        let squareCells = [
+            CellPosition(row: row, col: col),
+            CellPosition(row: row, col: col + 1),
+            CellPosition(row: row + 1, col: col),
+            CellPosition(row: row + 1, col: col + 1)
+        ]
+        
+        // If any cell is part of an active flower, don't form a square
+        for cell in squareCells {
+            if clickableFlowerCells.contains(cell) {
+                return false
+            }
+        }
+        
         // Check if all cells in the 2x2 area have the correct rotations
         let topLeft = getRotation(unboundedRotation: rotationStates[row][col])
         let topRight = getRotation(unboundedRotation: rotationStates[row][col + 1])
@@ -1704,6 +1802,206 @@ class GameViewController: UIViewController {
         
         // Update previous squares for next comparison
         previousPipeSquares = pipeSquares
+    }
+
+    // Trigger flower formation in a random 4x4 area
+    private func triggerFlowerFormation() {
+        // Only allow one flower at a time
+        guard activeFlower == nil else { return }
+        
+        // Find a 4x4 area that doesn't contain any rotating cells
+        guard let flowerArea = findFree4x4Area() else { return }
+        
+        // Store previous rotations for the flower area
+        let previousRotations = getPreviousRotations(for: flowerArea)
+        
+        // Apply flower pattern to the 4x4 area
+        applyFlowerPattern(to: flowerArea)
+        
+        // Make flower cells clickable and start timer
+        activateFlowerInteraction(area: flowerArea, previousRotations: previousRotations)
+    }
+    
+    // Find a 4x4 area that doesn't contain any rotating cells
+    private func findFree4x4Area() -> (startRow: Int, startCol: Int)? {
+        // Check each possible 4x4 area on the board
+        for startRow in 0..<(GRID_ROWS - 3) {
+            for startCol in 0..<(GRID_COLS - 3) {
+                // Check if this 4x4 area is free of rotating cells
+                let isFree = check4x4AreaFree(startRow: startRow, startCol: startCol)
+                if isFree {
+                    return (startRow, startCol)
+                }
+            }
+        }
+        return nil
+    }
+    
+    // Check if a 4x4 area is free of rotating cells
+    private func check4x4AreaFree(startRow: Int, startCol: Int) -> Bool {
+        for row in startRow..<(startRow + 4) {
+            for col in startCol..<(startCol + 4) {
+                let cell = CellPosition(row: row, col: col)
+                
+                // Check if cell is rotating
+                if currentRotatingCells.contains(cell) {
+                    return false
+                }
+                
+                // Check if cell is part of an active (green) square
+                if clickableSquarePipes.contains(cell) {
+                    return false
+                }
+                
+                // Check if cell is part of a deactivated (gray) square
+                if expiredSquares.contains(cell) {
+                    return false
+                }
+                
+                // Check if cell is part of an active flower
+                if clickableFlowerCells.contains(cell) {
+                    return false
+                }
+                
+                // Check if cell is adjacent to any rotating cell (buffer zone)
+                for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                    let adjacentRow = row + dy
+                    let adjacentCol = col + dx
+                    
+                    // Check bounds
+                    if adjacentRow >= 0 && adjacentRow < GRID_ROWS && 
+                       adjacentCol >= 0 && adjacentCol < GRID_COLS {
+                        let adjacentCell = CellPosition(row: adjacentRow, col: adjacentCol)
+                        if currentRotatingCells.contains(adjacentCell) {
+                            return false
+                        }
+                    }
+                }
+            }
+        }
+        return true
+    }
+    
+    // Apply flower pattern to a 4x4 area
+    private func applyFlowerPattern(to area: (startRow: Int, startCol: Int)) {
+        for row in 0..<4 {
+            for col in 0..<4 {
+                if let rotationOffset = flowerPattern[row][col] {
+                    let cellRow = area.startRow + row
+                    let cellCol = area.startCol + col
+                    let cell = CellPosition(row: cellRow, col: cellCol)
+                    
+                    // Apply the rotation offset
+                    rotationStates[cellRow][cellCol] = rotationOffset
+                    
+                    // Animate the rotation
+                    let targetRotation = rotationStates[cellRow][cellCol]
+                    animatePipeRotation(cell: cell, targetRotation: targetRotation, completion: nil)
+                }
+            }
+        }
+    }
+
+    // Get previous rotations for a flower area
+    private func getPreviousRotations(for area: (startRow: Int, startCol: Int)) -> [[Int]] {
+        var rotations: [[Int]] = []
+        for row in 0..<4 {
+            var rowRotations: [Int] = []
+            for col in 0..<4 {
+                let cellRow = area.startRow + row
+                let cellCol = area.startCol + col
+                rowRotations.append(rotationStates[cellRow][cellCol])
+            }
+            rotations.append(rowRotations)
+        }
+        return rotations
+    }
+    
+    // Activate flower interaction (make clickable and start timer)
+    private func activateFlowerInteraction(area: (startRow: Int, startCol: Int), previousRotations: [[Int]]) {
+        // Add all flower cells to clickable set
+        for row in 0..<4 {
+            for col in 0..<4 {
+                // Skip the corners
+                if (row == 0 && col == 0) || (row == 0 && col == 3) || (row == 3 && col == 0) || (row == 3 && col == 3) {
+                    continue
+                }
+                let cellRow = area.startRow + row
+                let cellCol = area.startCol + col
+                let cell = CellPosition(row: cellRow, col: cellCol)
+                clickableFlowerCells.insert(cell)
+                
+                // Highlight flower cells (use a distinct color like pink)
+                //animateColorChange(for: cell, to: UIColor.systemPink, duration: 0.3)
+                animateCellYPosition(for: cell, towardCamera: true, duration: 0.3)
+            }
+        }
+        
+        // Start timer for flower timeout
+        let timer = Timer.scheduledTimer(withTimeInterval: FLOWER_CLICK_MAX_WAIT, repeats: false) { [weak self] _ in
+            self?.handleFlowerTimeout(area: area)
+        }
+        
+        // Store active flower
+        activeFlower = (area: area, previousRotations: previousRotations, timer: timer)
+    }
+    
+    // Handle flower timeout (user didn't click in time)
+    private func handleFlowerTimeout(area: (startRow: Int, startCol: Int)) {
+        // Clear active flower
+        clearActiveFlower()
+    }
+    
+    // Pop flower open with the specified pattern
+    private func popFlowerOpen(area: (startRow: Int, startCol: Int)) {
+        /**
+         * Start:
+         * .┌┐.
+         * ┌┘└┐
+         * └┐┌┘
+         * .└┘.
+         * Goal:
+         * .└┘.
+         * ┐┌┐┌
+         * ┘└┘└
+         * .┌┐.
+         */
+        
+        for row in 0..<4 {
+            for col in 0..<4 {
+                // If the corners are ignored, the flower pop open does a lot
+                // less So adding the conrers to the rotation seems better
+                // if (row == 0 && col == 0) || (row == 0 && col == 3) || (row == 3 && col == 0) || (row == 3 && col == 3) {
+                //     continue
+                // }
+                let cellRow = area.startRow + row
+                let cellCol = area.startCol + col
+                let cell = CellPosition(row: cellRow, col: cellCol)
+                
+                // Set the rotation state directly (not add to it)
+                rotationStates[cellRow][cellCol] += 2
+                
+                // Add to flower cells that need to be rotated in the next step
+                flowerCellsToRotate.append(cell)
+                
+                // Animate the rotation
+                let targetRotation = rotationStates[cellRow][cellCol]
+                animatePipeRotation(cell: cell, targetRotation: targetRotation, completion: nil)
+            }
+        }
+    }
+    
+    // Clear active flower
+    private func clearActiveFlower() {
+        // Clear clickable cells
+        for cell in clickableFlowerCells {
+            animateCellYPosition(for: cell, towardCamera: false, duration: 0.3)
+        }
+        clickableFlowerCells.removeAll()
+        
+        // Invalidate timer
+        activeFlower?.timer.invalidate()
+        activeFlower = nil
     }
 }
 
