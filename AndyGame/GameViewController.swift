@@ -53,12 +53,12 @@ func loadGLB(named filename: String) -> SCNScene? {
 }
 
 /**
- * Non-interactive Bonus elements:
+ * Non-interactive Bonus elements
+ * - Square formation (and then it auto breaks) bonus
  * - Island bonus?
  * - All cells rotated in one game bonus?
  * - All cells rotated in one *move* bonus?
  * - Move that goes over 5-10 etc rotations?
- * - Square formation (and then it auto breaks) bonus?
  * Interactive elements:
  * - Move counter limit
  * - Last chance (and follow-ups)
@@ -441,15 +441,15 @@ class GameViewController: UIViewController {
             highlightRotatingPipe(bottomLeft)
             highlightRotatingPipe(bottomRight)
             
-            rotationStates[topLeft.row][topLeft.col] = 3
-            rotationStates[topRight.row][topRight.col] = 0
-            rotationStates[bottomLeft.row][bottomLeft.col] = 2
-            rotationStates[bottomRight.row][bottomRight.col] = 1
+            rotationStates[topLeft.row][topLeft.col] += 2
+            rotationStates[topRight.row][topRight.col] += 2
+            rotationStates[bottomLeft.row][bottomLeft.col] += 2
+            rotationStates[bottomRight.row][bottomRight.col] += 2
             
-            animatePipeRotation(cell: topLeft, targetRotation: 3, completion: nil)
-            animatePipeRotation(cell: topRight, targetRotation: 0, completion: nil)
-            animatePipeRotation(cell: bottomLeft, targetRotation: 2, completion: nil)
-            animatePipeRotation(cell: bottomRight, targetRotation: 1, completion: nil)
+            animatePipeRotation(cell: topLeft, targetRotation: rotationStates[topLeft.row][topLeft.col], completion: nil)
+            animatePipeRotation(cell: topRight, targetRotation: rotationStates[topRight.row][topRight.col], completion: nil)
+            animatePipeRotation(cell: bottomLeft, targetRotation: rotationStates[bottomLeft.row][bottomLeft.col], completion: nil)
+            animatePipeRotation(cell: bottomRight, targetRotation: rotationStates[bottomRight.row][bottomRight.col], completion: nil)
         }
         
         // Remove cells that are part of squareCellsToExpand from the cells array
@@ -556,24 +556,13 @@ class GameViewController: UIViewController {
         if shouldDelayNextRotation {
             // Delay the next rotation by 1 second
             DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_COMPLETION_DELAY) {
-                // Restore original materials only for pipes that are no longer rotating
-                for (node, originalMaterial) in self.originalMaterials {
-                    // Only restore if this node is not still rotating
-                    if let position = self.cylinderNodes[node], !self.currentRotatingCells.contains(position) {
-                        if let geometry = node.geometry, let material = geometry.firstMaterial {
-                            material.diffuse.contents = originalMaterial.diffuse.contents
-                        }
-                    }
-                }
+                // Don't restore materials here - let the next rotation step handle it
             }
         } else {
-            // Restore original materials only for pipes that are no longer rotating
+            // Restore all original materials when rotation chain is completely finished
             for (node, originalMaterial) in self.originalMaterials {
-                // Only restore if this node is not still rotating
-                if let position = self.cylinderNodes[node], !self.currentRotatingCells.contains(position) {
-                    if let geometry = node.geometry, let material = geometry.firstMaterial {
-                        material.diffuse.contents = originalMaterial.diffuse.contents
-                    }
+                if let geometry = node.geometry, let material = geometry.firstMaterial {
+                    material.diffuse.contents = originalMaterial.diffuse.contents
                 }
             }
         }
