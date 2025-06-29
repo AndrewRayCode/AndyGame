@@ -428,11 +428,7 @@ class GameViewController: UIViewController {
             startSquarePipeInteraction()
         }
         
-        // Initialize completion tracking
-        animationCompletionCount = 0
-        totalAnimationsInBatch = cells.count
-        currentRotatingCells = cells
-
+        // Pop open the square
         for square in squareCellsToExpand {
             let topRight = square[1]
             let bottomLeft = square[2]
@@ -456,31 +452,50 @@ class GameViewController: UIViewController {
             animatePipeRotation(cell: bottomRight, targetRotation: 1, completion: nil)
         }
         
-        // Process each cell in the array
-        for cell in cells {
-            // Update rotation state (unbounded)
-            rotationStates[cell.row][cell.col] -= 1
+        // Remove cells that are part of squareCellsToExpand from the cells array
+        let cellsInSquares = squareCellsToExpand.flatMap { $0 }
+        let squareCells = Set(cellsInSquares)
+        let filteredCells = cells.filter { !squareCells.contains($0) }
+        
+        // Edge case: When all rotating cells are part of squares, the square
+        // has popped open, but there will be nothing left in cells to animate.
+        // So manually fire the next step
+        if filteredCells.count == 0 && squareCells.count > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_TIME) {
+                self.onRotationComplete(rotatedCells: cellsInSquares)
+            }
+        } else {
+            // Initialize completion tracking
+            animationCompletionCount = 0
+            totalAnimationsInBatch = filteredCells.count
+            currentRotatingCells = cells
             
-            // Add 1 point for each rotation
-            addToScore(1)
-            
-            // Calculate visual rotation based on state
-            let rotationState = rotationStates[cell.row][cell.col]
-
-            // Highlight the pipe as rotating
-            highlightRotatingPipe(cell)
-            
-            // Animate a pipe rotation with spring physics
-            animatePipeRotation(cell: cell, targetRotation: rotationState, completion: {
-                // Increment the completion counter
-                self.animationCompletionCount += 1
+            // Process each cell in the filtered array
+            for cell in filteredCells {
+                // Update rotation state (unbounded)
+                rotationStates[cell.row][cell.col] -= 1
                 
-                // Check if all animations in this batch are complete
-                if self.animationCompletionCount >= self.totalAnimationsInBatch {
-                    let cellsAndCellsInSquares = cells + squareCellsToExpand.flatMap { $0 }
-                    self.onRotationComplete(rotatedCells: cellsAndCellsInSquares)
-                }
-            })
+                // Add 1 point for each rotation
+                addToScore(1)
+                
+                // Calculate visual rotation based on state
+                let rotationState = rotationStates[cell.row][cell.col]
+                
+                // Highlight the pipe as rotating
+                highlightRotatingPipe(cell)
+                
+                // Animate a pipe rotation with spring physics
+                animatePipeRotation(cell: cell, targetRotation: rotationState, completion: {
+                    // Increment the completion counter
+                    self.animationCompletionCount += 1
+                    
+                    // Check if all animations in this batch are complete
+                    if self.animationCompletionCount >= self.totalAnimationsInBatch {
+                        let cellsAndCellsInSquares = cells + squareCellsToExpand.flatMap { $0 }
+                        self.onRotationComplete(rotatedCells: cellsAndCellsInSquares)
+                    }
+                })
+            }
         }
     }
     
