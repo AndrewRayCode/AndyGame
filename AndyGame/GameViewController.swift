@@ -59,10 +59,10 @@ func loadGLB(named filename: String) -> SCNScene? {
  * - All cells rotated in one game bonus?
  * - All cells rotated in one *move* bonus?
  * - Move that goes over 5-10 etc rotations?
- * Interactive elements:
  * - Move counter limit
- * - Last chance (and follow-ups)
+ * Interactive elements:
  * - Square breaker
+ * - Last chance (and follow-ups?)
  * - Multiple board sizes?
  */
 class GameViewController: UIViewController {
@@ -1113,6 +1113,13 @@ class GameViewController: UIViewController {
             let cellKey = "\(pipe.row)_\(pipe.col)"
             if squaresWithStarterCells.contains(cellKey) {
                 return // Skip this square - it contains a starter cell
+            }
+        }
+        
+        // Check if any pipes in this square are expired (gray) - if so, skip activation
+        for pipe in square {
+            if expiredSquares.contains(pipe) {
+                return // Skip this square - it contains expired pipes
             }
         }
         
