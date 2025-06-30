@@ -64,6 +64,7 @@ func loadGLB(named filename: String) -> SCNScene? {
  * - Square breaker
  * - Last chance (and follow-ups?)
  * - Multiple board sizes?
+ * - Bonus if every cell on the board has rotated
  */
 class GameViewController: UIViewController {
     
@@ -110,7 +111,12 @@ class GameViewController: UIViewController {
     private var squarePipeStartTime: Date?
 
     private let CYLINDER_COLOR = UIColor(red: 0.1, green: 0.6, blue: 1.0, alpha: 1.0)
+
+    private let CYLINDER_HAS_ROTATED_COLOR = UIColor(red: 0.1, green: 0.5, blue: 1.0, alpha: 1.0)
     private let CYLINDER_COLOR_HIGHLIGHT = UIColor(red: 0.2, green: 0.7, blue: 1.0, alpha: 1.0)
+
+    private let SQUARE_HIGHLIGHT_COLOR = UIColor(red: 0.2, green: 0.7, blue: 1.0, alpha: 1.0)
+    private let SQUARE_DISABLED_COLOR = UIColor(red: 0.5, green: 0.5, blue: 0.7, alpha: 1.0)
 
     private let SQUARE_CLICK_MIN_WAIT = 1.0
     private let SQUARE_CLICK_MAX_WAIT = 2.0
@@ -1232,7 +1238,8 @@ class GameViewController: UIViewController {
         // Add all pipes in the square to clickable set
         for pipe in square {
             clickableSquarePipes.insert(pipe)
-            turnPipeGreen(pipe)
+            animateColorChange(for: pipe, to: SQUARE_HIGHLIGHT_COLOR, duration: 0.2)
+            animateCellYPosition(for: pipe, towardCamera: true, duration: 0.3)
         }
         
         // Schedule deactivation of entire square after 3 seconds
@@ -1257,8 +1264,9 @@ class GameViewController: UIViewController {
                 // Square was clicked, keep it gold (color change already handled in handleSquarePipeClick)
                 // Don't reset color here since we want it to stay gold
             } else {
-                // Square expired without being clicked, turn gray
-                turnPipeGray(pipe)
+                // Square expired without being clicked
+                animateColorChange(for: pipe, to: SQUARE_DISABLED_COLOR, duration: 0.3)
+                animateCellYPosition(for: pipe, towardCamera: false, duration: 0.3)
                 expiredSquares.insert(pipe)
             }
         }
@@ -1266,18 +1274,6 @@ class GameViewController: UIViewController {
         // Remove the timer
         let squareKey = "square_\(square[0].row)_\(square[0].col)"
         squarePipeGreenTimers.removeValue(forKey: squareKey)
-    }
-    
-    // Turn a pipe green to indicate it's clickable
-    private func turnPipeGreen(_ pipe: CellPosition) {
-        animateColorChange(for: pipe, to: UIColor.systemGreen, duration: 0.2)
-        animateCellYPosition(for: pipe, towardCamera: true, duration: 0.3)
-    }
-    
-    // Turn a pipe gray to indicate it's expired
-    private func turnPipeGray(_ pipe: CellPosition) {
-        animateColorChange(for: pipe, to: UIColor.gray, duration: 0.3)
-        animateCellYPosition(for: pipe, towardCamera: false, duration: 0.3)
     }
     
     // Highlight a pipe as rotating (pink color)
@@ -2004,6 +2000,11 @@ class GameViewController: UIViewController {
                 let cellRow = area.startRow + row
                 let cellCol = area.startCol + col
                 let cell = CellPosition(row: cellRow, col: cellCol)
+
+                // If the cell isn't a corner, animate it to green
+                if !(row == 0 && col == 0) && !(row == 0 && col == 3) && !(row == 3 && col == 0) && !(row == 3 && col == 3) {
+                    animateColorChange(for: cell, to: UIColor.systemGreen, duration: 0.5)
+                }
                 
                 // Set the rotation state directly (not add to it)
                 rotationStates[cellRow][cellCol] += 2
@@ -2011,9 +2012,11 @@ class GameViewController: UIViewController {
                 // Add to flower cells that need to be rotated in the next step
                 flowerCellsToRotate.append(cell)
                 
-                // Animate the rotation
-                let targetRotation = rotationStates[cellRow][cellCol]
-                animatePipeRotation(cell: cell, targetRotation: targetRotation)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    // Animate the rotation
+                    let targetRotation = self.rotationStates[cellRow][cellCol]
+                    self.animatePipeRotation(cell: cell, targetRotation: targetRotation)
+                }
             }
         }
     }
@@ -2080,7 +2083,7 @@ class GameViewController: UIViewController {
                 SCNTransaction.begin()
                 SCNTransaction.animationDuration = 0.3
                 SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeOut)
-                material.diffuse.contents = originalMaterial.diffuse.contents
+                material.diffuse.contents = CYLINDER_HAS_ROTATED_COLOR
                 SCNTransaction.commit()
             }
         }
