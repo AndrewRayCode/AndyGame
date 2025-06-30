@@ -80,9 +80,9 @@ class GameViewController: UIViewController {
     
     private let ROTATION_TIME = 0.6
     
-    private let cylinderRadius: Float = 0.5
-    private let cylinderHeight: Float = 0.5
-    
+    private let CYLINDER_RADIUS: Float = 0.5
+    private let CYLINDER_HEIGHT: Float = 0.5
+
     // 2D array to store rotation states for each cylinder
     var rotationStates: [[Int]] = []
     
@@ -119,6 +119,9 @@ class GameViewController: UIViewController {
     private let LAST_CHANCE_TIME = 5.0
     private let ROTATION_DURATION = 0.3
     private let FLOWER_CLICK_MAX_WAIT = 3.0
+    
+    // Pause for effect in (at least) square breaker
+    private let ROTATION_COMPLETION_DELAY = 0.5
     
     // Track clicked squares for next rotation
     private var clickedSquares: [[CellPosition]] = []
@@ -288,7 +291,7 @@ class GameViewController: UIViewController {
         for row in 0..<GRID_ROWS {
             for col in 0..<GRID_COLS {
                 // Create cylinder geometry
-                let cylinderGeometry = SCNCylinder(radius: CGFloat(cylinderRadius), height: CGFloat(cylinderHeight))
+                let cylinderGeometry = SCNCylinder(radius: CGFloat(CYLINDER_RADIUS), height: CGFloat(CYLINDER_HEIGHT))
                 
                 // Create material - brighter color
                 let material = SCNMaterial()
@@ -313,7 +316,7 @@ class GameViewController: UIViewController {
                 
                 cylinderNode.position = SCNVector3(
                     x: xPos,
-                    y: cylinderHeight / 2, // Place on ground level
+                    y: CYLINDER_HEIGHT / 2, // Place on ground level
                     z: zPos
                 )
                 
@@ -328,7 +331,7 @@ class GameViewController: UIViewController {
                 makePipeMaterialsReflective(childPipe)
                 childPipe.position = SCNVector3(
                     x: 0,
-                    y: cylinderHeight / 2,
+                    y: CYLINDER_HEIGHT / 2,
                     z: 0
                 )
                 let childPipeScale = Float(0.25)
@@ -513,14 +516,13 @@ class GameViewController: UIViewController {
                 self.onRotationComplete(rotatedCells: cellsInSquares)
             }
         } else {
-            // Initialize completion tracking
             animationCompletionCount = 0
             totalAnimationsInBatch = filteredCells.count
             currentRotatingCells = cells
             
             // Process each cell in the filtered array
             // get cell and for loop index
-            for (index, cell) in filteredCells.enumerated() {
+            for cell in filteredCells {
                 // Update rotation state (unbounded)
                 rotationStates[cell.row][cell.col] -= 1
                 
@@ -532,18 +534,12 @@ class GameViewController: UIViewController {
                 
                 // Highlight the pipe as rotating
                 highlightRotatingPipe(cell)
-                
-                // Animate a pipe rotation with spring physics
-                animatePipeRotation(cell: cell, targetRotation: rotationState, completion: {
-                    // Increment the completion counter
-                    self.animationCompletionCount += 1
-                    
-                    // Check if all animations in this batch are complete
-                    if self.animationCompletionCount >= self.totalAnimationsInBatch {
-                        let cellsAndCellsInSquares = cells + squareCellsToExpand.flatMap { $0 }
-                        self.onRotationComplete(rotatedCells: cellsAndCellsInSquares)
-                    }
-                })
+                animatePipeRotation(cell: cell, targetRotation: rotationState)
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_TIME) {
+                let cellsAndCellsInSquares = cells + squareCellsToExpand.flatMap { $0 }
+                self.onRotationComplete(rotatedCells: cellsAndCellsInSquares)
             }
         }
     }
@@ -598,9 +594,6 @@ class GameViewController: UIViewController {
     }
     
     private func onRotationComplete(rotatedCells: [CellPosition]) {
-        // Pause for effect in (at least) square breaker
-        let ROTATION_COMPLETION_DELAY = 0.5
-
         // Detect pipe squares after rotation
         detectPipeSquares()
         
@@ -645,14 +638,11 @@ class GameViewController: UIViewController {
                 }
             } else {
                 // Restore all original materials when rotation chain is completely finished
-                for (node, originalMaterial) in self.originalMaterials {
-                    if let geometry = node.geometry, let material = geometry.firstMaterial {
-                        material.diffuse.contents = originalMaterial.diffuse.contents
-                    }
-                }
+                restoreOriginalMaterialsWithAnimation()
                 rotateCells(allCellsToRotate, clickedSquareCells + newlyFormedSquareCells)
             }
         } else {
+            restoreOriginalMaterialsWithAnimation()
             isRotating = false
             originalMaterials.removeAll()
             updateResetButtonState()
@@ -878,7 +868,7 @@ class GameViewController: UIViewController {
         
         // Animate both rotation and y position
         cylinderNode.eulerAngles.y = visualRotation
-        cylinderNode.position.y = cylinderHeight / 2 + cylinderHeight * 2.0
+        cylinderNode.position.y = CYLINDER_HEIGHT / 2 + CYLINDER_HEIGHT * 2.0
         
         SCNTransaction.commit()
         
@@ -891,7 +881,7 @@ class GameViewController: UIViewController {
             SCNTransaction.begin()
             SCNTransaction.animationDuration = OUT_ANIMATION_TIME
             SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            cylinderNode.position.y = self.cylinderHeight / 2
+            cylinderNode.position.y = self.CYLINDER_HEIGHT / 2
             SCNTransaction.commit()
             
             completion()
@@ -1724,7 +1714,7 @@ class GameViewController: UIViewController {
         
         // Animate both rotation and y position
         cylinderNode.eulerAngles.y = visualRotation
-        cylinderNode.position.y = cylinderHeight / 2 + cylinderHeight * 2.0
+        cylinderNode.position.y = CYLINDER_HEIGHT / 2 + CYLINDER_HEIGHT * 2.0
         
         SCNTransaction.commit()
         
@@ -1737,7 +1727,7 @@ class GameViewController: UIViewController {
             SCNTransaction.begin()
             SCNTransaction.animationDuration = ANIMATE_OUT_DURATION
             SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            cylinderNode.position.y = self.cylinderHeight / 2
+            cylinderNode.position.y = self.CYLINDER_HEIGHT / 2
             SCNTransaction.commit()
             
             completion()
@@ -1770,7 +1760,7 @@ class GameViewController: UIViewController {
     private func animateCellYPosition(for cell: CellPosition, towardCamera: Bool, duration: TimeInterval = 0.3) {
         guard let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) else { return }
         
-        let targetY: Float = towardCamera ? cylinderHeight / 2 + cylinderHeight : cylinderHeight / 2
+        let targetY: Float = towardCamera ? CYLINDER_HEIGHT / 2 + CYLINDER_HEIGHT : CYLINDER_HEIGHT / 2
         
         SCNTransaction.begin()
         SCNTransaction.animationDuration = duration
@@ -2081,6 +2071,20 @@ class GameViewController: UIViewController {
         
         // Return the next closest multiple
         return currentUnbounded + adjustedDiff
+    }
+
+    // Restore all original materials with animation
+    private func restoreOriginalMaterialsWithAnimation() {
+        for (node, originalMaterial) in originalMaterials {
+            if let geometry = node.geometry, let material = geometry.firstMaterial {
+                // Animate the color change back to original
+                SCNTransaction.begin()
+                SCNTransaction.animationDuration = 0.3
+                SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeOut)
+                material.diffuse.contents = originalMaterial.diffuse.contents
+                SCNTransaction.commit()
+            }
+        }
     }
 }
 
