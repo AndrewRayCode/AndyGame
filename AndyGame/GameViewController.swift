@@ -153,6 +153,10 @@ class GameViewController: UIViewController {
     private var clickableFlowerCells: Set<CellPosition> = []
     private var flowerCellsToRotate: [CellPosition] = []
     
+    // Track formations created in current rotation frame
+    private var squaresCreatedThisFrame: Set<CellPosition> = []
+    private var flowersCreatedThisFrame: Set<CellPosition> = []
+    
     // Flower rotation pattern (4x4 grid)
     private let flowerPattern: [[Int?]] = [
         [nil, 1, 2, nil],      // [don't rotate, .one, .two, don't rotate]
@@ -452,6 +456,11 @@ class GameViewController: UIViewController {
         // Set rotating flag to prevent other taps
         isRotating = true
         updateResetButtonState()
+        
+        // Clear frame tracking for new rotation
+        squaresCreatedThisFrame.removeAll()
+        flowersCreatedThisFrame.removeAll()
+        
         detectPipeSquares()
         
         // Track squares that contain starter cells (cells that initiated this rotation)
@@ -485,10 +494,10 @@ class GameViewController: UIViewController {
             rotationStates[bottomLeft.row][bottomLeft.col] += 2
             rotationStates[bottomRight.row][bottomRight.col] += 2
             
-            animatePipeRotation(cell: topLeft, targetRotation: rotationStates[topLeft.row][topLeft.col], completion: nil)
-            animatePipeRotation(cell: topRight, targetRotation: rotationStates[topRight.row][topRight.col], completion: nil)
-            animatePipeRotation(cell: bottomLeft, targetRotation: rotationStates[bottomLeft.row][bottomLeft.col], completion: nil)
-            animatePipeRotation(cell: bottomRight, targetRotation: rotationStates[bottomRight.row][bottomRight.col], completion: nil)
+            animatePipeRotation(cell: topLeft, targetRotation: rotationStates[topLeft.row][topLeft.col])
+            animatePipeRotation(cell: topRight, targetRotation: rotationStates[topRight.row][topRight.col])
+            animatePipeRotation(cell: bottomLeft, targetRotation: rotationStates[bottomLeft.row][bottomLeft.col])
+            animatePipeRotation(cell: bottomRight, targetRotation: rotationStates[bottomRight.row][bottomRight.col])
         }
         
         // Remove cells that are part of squareCellsToExpand from the cells array
@@ -510,7 +519,8 @@ class GameViewController: UIViewController {
             currentRotatingCells = cells
             
             // Process each cell in the filtered array
-            for cell in filteredCells {
+            // get cell and for loop index
+            for (index, cell) in filteredCells.enumerated() {
                 // Update rotation state (unbounded)
                 rotationStates[cell.row][cell.col] -= 1
                 
@@ -590,23 +600,7 @@ class GameViewController: UIViewController {
     private func onRotationComplete(rotatedCells: [CellPosition]) {
         // Pause for effect in (at least) square breaker
         let ROTATION_COMPLETION_DELAY = 0.5
-        
-        // Check if we should delay the next rotation step due to square breaking
-        if shouldDelayNextRotation {
-            // Delay the next rotation by 1 second
-            DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_COMPLETION_DELAY) {
-                // Continue the rotation chain after the delay
-                self.rotateCells(rotatedCells, clickedSquareCells + newlyFormedSquareCells)
-            }
-        } else {
-            // Restore all original materials when rotation chain is completely finished
-            for (node, originalMaterial) in self.originalMaterials {
-                if let geometry = node.geometry, let material = geometry.firstMaterial {
-                    material.diffuse.contents = originalMaterial.diffuse.contents
-                }
-            }
-        }
-        
+
         // Detect pipe squares after rotation
         detectPipeSquares()
         
@@ -618,10 +612,10 @@ class GameViewController: UIViewController {
         for cell in rotatedCells {
             let neighbors = findConnectedNeighbors(row: cell.row, col: cell.col)
 
-             if neighbors.count > 0 {
-                 newNeighborsToRotate.append(cell)
-                 newNeighborsToRotate.append(contentsOf: neighbors)
-             }
+            if neighbors.count > 0 {
+                newNeighborsToRotate.append(cell)
+                newNeighborsToRotate.append(contentsOf: neighbors)
+            }
         }
         
         // Process clicked squares and add their cells to rotation with target rotations
@@ -638,6 +632,7 @@ class GameViewController: UIViewController {
         let uniqueNeighbors = Array(Set(newNeighborsToRotate))
         
         let allCellsToRotate = uniqueNeighbors + flowerCellsForRotation
+        
         if allCellsToRotate.count > 0 {
             addToScore(allCellsToRotate.count)
             
@@ -649,6 +644,12 @@ class GameViewController: UIViewController {
                     self.rotateCells(allCellsToRotate, clickedSquareCells + newlyFormedSquareCells)
                 }
             } else {
+                // Restore all original materials when rotation chain is completely finished
+                for (node, originalMaterial) in self.originalMaterials {
+                    if let geometry = node.geometry, let material = geometry.firstMaterial {
+                        material.diffuse.contents = originalMaterial.diffuse.contents
+                    }
+                }
                 rotateCells(allCellsToRotate, clickedSquareCells + newlyFormedSquareCells)
             }
         } else {
@@ -661,6 +662,10 @@ class GameViewController: UIViewController {
             
             // Clear any remaining flower cells that need rotation
             flowerCellsToRotate.removeAll()
+            
+            // Clear frame tracking
+            squaresCreatedThisFrame.removeAll()
+            flowersCreatedThisFrame.removeAll()
             
             // Reset any clickable flowers when rotations have stopped
             if activeFlower != nil {
@@ -801,6 +806,7 @@ class GameViewController: UIViewController {
             completion?()
             return
         }
+        
         let visualRotation = Float(targetRotation) * -Float.pi / 2
         
         // Create springy rotation animation using CASpringAnimation
@@ -812,19 +818,18 @@ class GameViewController: UIViewController {
         springAnimation.stiffness = 400.0 // Spring stiffness (higher = faster)
         springAnimation.mass = 1.0 // Mass of the spring (higher = slower)
         springAnimation.initialVelocity = 0.5 // Initial velocity
-        
+
         // Store completion callback
         if let completion = completion {
             springAnimation.setValue(completion, forKey: "completionCallback")
             // Set up completion tracking
             springAnimation.delegate = self
         }
-        
-        
+
         // Store reference to track completion
         let animationKey = "rotation_\(cell.row)_\(cell.col)"
         cylinderNode.addAnimation(springAnimation, forKey: animationKey)
-        
+
         // Update the actual property
         cylinderNode.eulerAngles.y = visualRotation
     }
@@ -1072,7 +1077,7 @@ class GameViewController: UIViewController {
         coordinator.animate(alongsideTransition: { _ in
             // Update grid scale when orientation changes
             self.updateGridScale()
-        }, completion: nil)
+        })
     }
     
     override func viewDidLayoutSubviews() {
@@ -1100,6 +1105,7 @@ class GameViewController: UIViewController {
     // Detect 2x2 squares formed by pipes pointing at each other
     private func detectPipeSquares() {
         pipeSquares.removeAll()
+        squaresCreatedThisFrame.removeAll() // Clear tracking for this frame
         
         // Check each possible 2x2 square on the board
         for row in 0..<(GRID_ROWS - 1) {
@@ -1112,7 +1118,19 @@ class GameViewController: UIViewController {
                         CellPosition(row: row + 1, col: col),
                         CellPosition(row: row + 1, col: col + 1)
                     ]
-                    pipeSquares.append(squareCells)
+                    
+                    // Check for overlap with flowers created this frame
+                    let hasFlowerOverlap = squareCells.contains { cell in
+                        flowersCreatedThisFrame.contains(cell)
+                    }
+                    
+                    if !hasFlowerOverlap {
+                        pipeSquares.append(squareCells)
+                        // Track these cells as squares created this frame
+                        for cell in squareCells {
+                            squaresCreatedThisFrame.insert(cell)
+                        }
+                    }
                 }
             }
         }
@@ -1812,11 +1830,26 @@ class GameViewController: UIViewController {
         // Find a 4x4 area that doesn't contain any rotating cells
         guard let flowerArea = findFree4x4Area() else { return }
         
+        // Check for overlap with squares created this frame
+        let flowerCells = getFlowerCells(for: flowerArea)
+        let hasSquareOverlap = flowerCells.contains { cell in
+            squaresCreatedThisFrame.contains(cell)
+        }
+        
+        if hasSquareOverlap {
+            return // Don't form flower if it overlaps with squares created this frame
+        }
+        
         // Store previous rotations for the flower area
         let previousRotations = getPreviousRotations(for: flowerArea)
         
         // Apply flower pattern to the 4x4 area
         applyFlowerPattern(to: flowerArea)
+        
+        // Track these cells as flowers created this frame
+        for cell in flowerCells {
+            flowersCreatedThisFrame.insert(cell)
+        }
         
         // Make flower cells clickable and start timer
         activateFlowerInteraction(area: flowerArea, previousRotations: previousRotations)
@@ -1891,12 +1924,17 @@ class GameViewController: UIViewController {
                     let cellCol = area.startCol + col
                     let cell = CellPosition(row: cellRow, col: cellCol)
                     
-                    // Apply the rotation offset
-                    rotationStates[cellRow][cellCol] = rotationOffset
+                    // Get the current unbounded rotation state
+                    let currentRotation = rotationStates[cellRow][cellCol]
+                    
+                    // Find the next closest multiple of the target rotation
+                    let targetRotation = findNextClosestMultiple(currentUnbounded: currentRotation, targetBounded: rotationOffset)
+                    
+                    // Apply the target rotation
+                    rotationStates[cellRow][cellCol] = targetRotation
                     
                     // Animate the rotation
-                    let targetRotation = rotationStates[cellRow][cellCol]
-                    animatePipeRotation(cell: cell, targetRotation: targetRotation, completion: nil)
+                    animatePipeRotation(cell: cell, targetRotation: targetRotation)
                 }
             }
         }
@@ -1986,7 +2024,7 @@ class GameViewController: UIViewController {
                 
                 // Animate the rotation
                 let targetRotation = rotationStates[cellRow][cellCol]
-                animatePipeRotation(cell: cell, targetRotation: targetRotation, completion: nil)
+                animatePipeRotation(cell: cell, targetRotation: targetRotation)
             }
         }
     }
@@ -2002,6 +2040,47 @@ class GameViewController: UIViewController {
         // Invalidate timer
         activeFlower?.timer.invalidate()
         activeFlower = nil
+    }
+    
+    // Get all cells in a flower area (including corners)
+    private func getFlowerCells(for area: (startRow: Int, startCol: Int)) -> [CellPosition] {
+        var cells: [CellPosition] = []
+        for row in 0..<4 {
+            for col in 0..<4 {
+                let cellRow = area.startRow + row
+                let cellCol = area.startCol + col
+                cells.append(CellPosition(row: cellRow, col: cellCol))
+            }
+        }
+        return cells
+    }
+    
+    // Find the next closest multiple of target rotation from current unbounded rotation
+    private func findNextClosestMultiple(currentUnbounded: Int, targetBounded: Int) -> Int {
+        // Ensure target is in range 0-3
+        let normalizedTarget = ((targetBounded % 4) + 4) % 4
+        
+        // Find the current rotation modulo 4
+        let currentMod4 = ((currentUnbounded % 4) + 4) % 4
+        
+        // Calculate the difference to reach the target
+        let diff = normalizedTarget - currentMod4
+        
+        // Handle wraparound cases
+        let adjustedDiff: Int
+        if diff > 2 {
+            // Target is much higher, go negative
+            adjustedDiff = diff - 4
+        } else if diff < -2 {
+            // Target is much lower, go positive
+            adjustedDiff = diff + 4
+        } else {
+            // Use the direct difference
+            adjustedDiff = diff
+        }
+        
+        // Return the next closest multiple
+        return currentUnbounded + adjustedDiff
     }
 }
 
