@@ -53,18 +53,28 @@ func loadGLB(named filename: String) -> SCNScene? {
 }
 
 /**
- * Non-interactive Bonus elements
- * - Square formation (and then it auto breaks) bonus
- * - Island bonus?
- * - All cells rotated in one game bonus?
- * - All cells rotated in one *move* bonus?
- * - Move that goes over 5-10 etc rotations?
- * - Move counter limit
- * Interactive elements:
- * - Square breaker
- * - Last chance (and follow-ups?)
- * - Multiple board sizes?
- * - Bonus if every cell on the board has rotated
+
+TODO
+- Squareformer needs to pause, so does flower breaker
+- Squareformer still causes all pipes to turn blue
+- Try particle effect
+- Flower needs to reset to previous rotations after it's formed if user doesn't click
+- Flower breaking open should turn the flower cells one color and the corners another (or maybe keep blue)
+ - make flower appear in random position, not always first open space
+
+Non-interactive Bonus elements
+- Square formation (and then it auto breaks) bonus
+- Island bonus?
+- All cells rotated in one game bonus?
+- All cells rotated in one *move* bonus?
+- Move that goes over 5-10 etc rotations?
+- Move counter limit
+
+Interactive elements:
+- Square breaker
+- Last chance (and follow-ups?)
+- Multiple board sizes?
+- Bonus if every cell on the board has rotated
  */
 class GameViewController: UIViewController {
     
@@ -174,6 +184,9 @@ class GameViewController: UIViewController {
         [nil, 0, 3, nil]       // [don't rotate, .zero, .three, don't rotate]
     ]
     
+    // Particle system for square breaking effects
+    private var squareBreakParticleSystem: SCNParticleSystem?
+    
     // Congratulations banner
     private var congratulationsBanner: UIView?
     
@@ -216,6 +229,9 @@ class GameViewController: UIViewController {
         
         // create a new scene
         scene = SCNScene()
+        
+        // Setup particle system for square breaking
+        setupSquareBreakParticleSystem()
         
         // Load environment map
         if let envMap = UIImage(named: "spherical.jpg") {
@@ -1324,6 +1340,10 @@ class GameViewController: UIViewController {
         // Find which square this pipe belongs to and deactivate the entire square
         for square in pipeSquares {
             if square.contains(pipe) {
+                // Trigger particle effect at the center of the square
+                let centerPosition = getSquareCenterPosition(square)
+                triggerSquareBreakParticles(at: centerPosition)
+                
                 // Mark all pipes in this square as clicked
                 for squarePipe in square {
                     clickedSquarePipes.insert(squarePipe)
@@ -1342,6 +1362,7 @@ class GameViewController: UIViewController {
                     clickedSquares.append(square)
                 }
                 
+                // Set delay flag for next rotation step
                 shouldDelayNextRotation = true
                 
                 // Show congratulations banner
@@ -1349,6 +1370,40 @@ class GameViewController: UIViewController {
                 break
             }
         }
+    }
+    
+    // Get the center position of a square in world coordinates
+    private func getSquareCenterPosition(_ square: [CellPosition]) -> SCNVector3 {
+        guard square.count == 4 else { return SCNVector3Zero }
+        
+        // Calculate average position using actual cylinder node positions
+        var totalX: Float = 0
+        var totalY: Float = 0
+        var totalZ: Float = 0
+        var validPositions = 0
+        
+        for cell in square {
+            if let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) {
+                let worldPosition = cylinderNode.worldPosition
+                totalX += worldPosition.x
+                totalY += worldPosition.y
+                totalZ += worldPosition.z
+                validPositions += 1
+            }
+        }
+        
+        guard validPositions > 0 else { 
+            print("No valid cylinder nodes found for square")
+            return SCNVector3Zero 
+        }
+        
+        let centerX = totalX / Float(validPositions)
+        let centerY = totalY / Float(validPositions) + 1.0 // Position above the pipes
+        let centerZ = totalZ / Float(validPositions)
+        
+        let finalPosition = SCNVector3(centerX, centerY, centerZ)
+        print("Square center calculated at: \(finalPosition)")
+        return finalPosition
     }
     
     // Handle click on last chance cell
@@ -1971,8 +2026,33 @@ class GameViewController: UIViewController {
     
     // Handle flower timeout (user didn't click in time)
     private func handleFlowerTimeout(area: (startRow: Int, startCol: Int)) {
+        // Reset cells back to their previous rotations
+        if let activeFlower = activeFlower {
+            resetFlowerToPreviousRotations(area: area, previousRotations: activeFlower.previousRotations)
+        }
+        
         // Clear active flower
         clearActiveFlower()
+    }
+    
+    // Reset flower cells back to their previous rotations
+    private func resetFlowerToPreviousRotations(area: (startRow: Int, startCol: Int), previousRotations: [[Int]]) {
+        for row in 0..<4 {
+            for col in 0..<4 {
+                let cellRow = area.startRow + row
+                let cellCol = area.startCol + col
+                let cell = CellPosition(row: cellRow, col: cellCol)
+                
+                // Get the previous rotation for this cell
+                let previousRotation = previousRotations[row][col]
+                
+                // Reset the rotation state to the previous value
+                rotationStates[cellRow][cellCol] = previousRotation
+                
+                // Animate the rotation back to the previous state
+                animatePipeRotation(cell: cell, targetRotation: previousRotation)
+            }
+        }
     }
     
     // Pop flower open with the specified pattern
@@ -2086,6 +2166,60 @@ class GameViewController: UIViewController {
                 material.diffuse.contents = CYLINDER_HAS_ROTATED_COLOR
                 SCNTransaction.commit()
             }
+        }
+    }
+
+    // Setup particle system for square breaking effects
+    private func setupSquareBreakParticleSystem() {
+        let particleSystem = SCNParticleSystem()
+        
+        // Particle appearance - make particles larger and more visible
+        particleSystem.particleSize = 0.01
+        particleSystem.particleColor = UIColor.systemYellow
+        particleSystem.particleColorVariation = SCNVector4(0.3, 0.3, 0.0, 0.2)
+        
+        // Particle behavior
+        particleSystem.particleLifeSpan = 2.0
+        particleSystem.particleLifeSpanVariation = 0.5
+        particleSystem.emissionDuration = 0.5
+        particleSystem.spreadingAngle = 90.0  // Wider spread
+        particleSystem.acceleration = SCNVector3(0, -1.0, 0) // Lighter gravity
+        
+        // Emission properties - use volume instead of surface
+        particleSystem.birthRate = 100
+        particleSystem.birthLocation = .volume
+        particleSystem.birthDirection = .random
+        
+        // Size variation over time
+        particleSystem.particleSizeVariation = 0.1
+        
+        // Store the particle system
+        squareBreakParticleSystem = particleSystem
+    }
+    
+    // Trigger particle effect at a specific position
+    private func triggerSquareBreakParticles(at position: SCNVector3) {
+        guard let particleSystem = squareBreakParticleSystem?.copy() as? SCNParticleSystem else { 
+            print("Failed to copy particle system")
+            return 
+        }
+        
+        // Create a node to hold the particle system
+        let particleNode = SCNNode()
+        particleNode.position = position
+        
+        // Add the particle system to the node
+        particleNode.addParticleSystem(particleSystem)
+        
+        // Add to scene
+        scene.rootNode.addChildNode(particleNode)
+        
+        print("Particle effect triggered at position: \(position)")
+        
+        // Remove the particle node after the effect is complete
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            particleNode.removeFromParentNode()
+            print("Particle node removed")
         }
     }
 }
