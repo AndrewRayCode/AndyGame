@@ -419,9 +419,10 @@ class GameViewController: UIViewController {
                 return
             }
             
-            // Check if it's a flower cell
+            // User clicked the flower in time!
             if clickableFlowerCells.contains(position) {
-                // User clicked the flower in time!
+                shouldDelayNextRotation = true
+                
                 showBanner(message: "Flower breaker!")
 
                 // Pop the flower open with the specified pattern
@@ -629,10 +630,9 @@ class GameViewController: UIViewController {
         if allCellsToRotate.count > 0 {
             addToScore(allCellsToRotate.count)
             
-            // Check if we should delay the next rotation step due to square breaking
+            // Check if we should delay the next rotation
             if shouldDelayNextRotation {
                 shouldDelayNextRotation = false
-                // Delay the next rotation by 1 second
                 DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_COMPLETION_DELAY) {
                     self.rotateCells(allCellsToRotate, clickedSquareCells + newlyFormedSquareCells)
                 }
@@ -1346,7 +1346,6 @@ class GameViewController: UIViewController {
                     clickedSquares.append(square)
                 }
                 
-                // Set delay flag for next rotation step
                 shouldDelayNextRotation = true
                 
                 // Show congratulations banner
