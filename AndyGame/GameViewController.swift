@@ -60,7 +60,7 @@ TODO
 - Try particle effect
 - Flower needs to reset to previous rotations after it's formed if user doesn't click
 - Flower breaking open should turn the flower cells one color and the corners another (or maybe keep blue)
- - make flower appear in random position, not always first open space
+- make flower appear in random position, not always first open space
 
 Non-interactive Bonus elements
 - Square formation (and then it auto breaks) bonus
@@ -187,8 +187,8 @@ class GameViewController: UIViewController {
     // Particle system for square breaking effects
     private var squareBreakParticleSystem: SCNParticleSystem?
     
-    // Congratulations banner
-    private var congratulationsBanner: UIView?
+    // Banner manager
+    private var bannerManager: BannerManager!
     
     // Reset button
     private var resetButton: UIButton!
@@ -216,10 +216,6 @@ class GameViewController: UIViewController {
     
     var scene: SCNScene!
     var gridGroupNode: SCNNode!
-    
-    // Generic banner system
-    private var activeBanners: [UIView] = []
-    private var bannerContainer: UIView?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -388,8 +384,8 @@ class GameViewController: UIViewController {
         // Initialize moves display
         updateMovesDisplay()
         
-        // Setup banner container
-        setupBannerContainer()
+        // Initialize banner manager
+        bannerManager = BannerManager(parentView: view)
         
         // Initialize previous pipe squares for new square detection
         previousPipeSquares = []
@@ -445,7 +441,7 @@ class GameViewController: UIViewController {
             if clickableFlowerCells.contains(position) {
                 shouldDelayNextRotation = true
                 
-                showBanner(message: "Flower breaker!")
+                bannerManager.showBanner(message: "Flower breaker!")
 
                 // Pop the flower open with the specified pattern
                 popFlowerOpen(area: activeFlower!.area)
@@ -1318,14 +1314,12 @@ class GameViewController: UIViewController {
         
         guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
         
-        if let geometry = cylinderNode.geometry {
-            // Check if this pipe was in the original materials (pink during rotation)
-            if let originalMaterial = originalMaterials[cylinderNode] {
-                animateColorChange(for: pipe, to: originalMaterial.diffuse.contents as? UIColor ?? CYLINDER_COLOR, duration: 0.2)
-            } else {
-                // Reset to default blue
-                animateColorChange(for: pipe, to: CYLINDER_COLOR, duration: 0.2)
-            }
+        // Check if this pipe was in the original materials (pink during rotation)
+        if let originalMaterial = originalMaterials[cylinderNode] {
+            animateColorChange(for: pipe, to: originalMaterial.diffuse.contents as? UIColor ?? CYLINDER_COLOR, duration: 0.2)
+        } else {
+            // Reset to default blue
+            animateColorChange(for: pipe, to: CYLINDER_COLOR, duration: 0.2)
         }
         
         // Animate back to original position
@@ -1365,8 +1359,7 @@ class GameViewController: UIViewController {
                 // Set delay flag for next rotation step
                 shouldDelayNextRotation = true
                 
-                // Show congratulations banner
-                showBanner(message: "Squarebreaker! 🎉")
+                bannerManager.showCongratulationsBanner()
                 break
             }
         }
@@ -1418,9 +1411,9 @@ class GameViewController: UIViewController {
         if remainingMoves <= 0 {
             remainingMoves = 1
             updateMovesDisplay()
-            showBanner(message: "One more move! 🎯")
+            bannerManager.showBanner(message: "One more move! 🎯")
         } else {
-            showBanner(message: "Randomize! +10 points! 🎯")
+            bannerManager.showBanner(message: "Randomize! +10 points! 🎯")
         }
         
         // Trigger radius randomization around the clicked cell
@@ -1460,74 +1453,6 @@ class GameViewController: UIViewController {
     // Reset an expired pipe's color to blue (used during board reset)
     private func resetExpiredPipeColor(_ pipe: CellPosition) {
         animateColorChange(for: pipe, to: CYLINDER_COLOR, duration: 0.3)
-    }
-    
-    // Show congratulations banner when a square is broken
-    private func showCongratulationsBanner() {
-        // Remove any existing banner
-        congratulationsBanner?.removeFromSuperview()
-        
-        // Create banner view
-        let banner = UIView()
-        banner.backgroundColor = UIColor.white
-        banner.layer.cornerRadius = 12
-        banner.layer.shadowColor = UIColor.black.cgColor
-        banner.layer.shadowOffset = CGSize(width: 0, height: 2)
-        banner.layer.shadowOpacity = 0.3
-        banner.layer.shadowRadius = 12
-        
-        // Create label
-        let label = UILabel()
-        label.text = "Squarebreaker! 🎉"
-        label.font = UIFont.systemFont(ofSize: 18, weight: .bold)
-        label.textColor = UIColor.black
-        label.textAlignment = .center
-        
-        // Add label to banner
-        banner.addSubview(label)
-        label.translatesAutoresizingMaskIntoConstraints = false
-        
-        // Add banner to view
-        view.addSubview(banner)
-        banner.translatesAutoresizingMaskIntoConstraints = false
-        
-        // Setup constraints
-        NSLayoutConstraint.activate([
-            // Banner constraints
-            banner.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            banner.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: 20),
-            banner.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.8),
-            banner.heightAnchor.constraint(equalToConstant: 50),
-            
-            // Label constraints
-            label.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 20),
-            label.trailingAnchor.constraint(equalTo: banner.trailingAnchor, constant: -20),
-            label.topAnchor.constraint(equalTo: banner.topAnchor, constant: 10),
-            label.bottomAnchor.constraint(equalTo: banner.bottomAnchor, constant: -10)
-        ])
-        
-        // Store reference
-        congratulationsBanner = banner
-        
-        // Animate in
-        banner.alpha = 0
-        banner.transform = CGAffineTransform(translationX: 0, y: 50)
-        
-        UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.7, initialSpringVelocity: 0.5, options: [], animations: {
-            banner.alpha = 1
-            banner.transform = .identity
-        })
-        
-        // Animate out after delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            UIView.animate(withDuration: 0.3, animations: {
-                banner.alpha = 0
-                banner.transform = CGAffineTransform(translationX: 0, y: -30)
-            }, completion: { _ in
-                banner.removeFromSuperview()
-                self.congratulationsBanner = nil
-            })
-        }
     }
     
     // Track squares that contain starter cells (cells that initiated this rotation)
@@ -1577,108 +1502,6 @@ class GameViewController: UIViewController {
         // Clear tracking
         lastChanceCell = nil
         lastChanceTimer = nil
-    }
-    
-    // Setup banner container for stacking multiple banners
-    private func setupBannerContainer() {
-        bannerContainer = UIView()
-        bannerContainer?.backgroundColor = UIColor.clear
-        bannerContainer?.translatesAutoresizingMaskIntoConstraints = false
-        
-        if let container = bannerContainer {
-            view.addSubview(container)
-            
-            NSLayoutConstraint.activate([
-                container.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-                container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -100),
-                container.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.8),
-                container.heightAnchor.constraint(greaterThanOrEqualToConstant: 50)
-            ])
-        }
-    }
-    
-    // Generic banner display function
-    private func showBanner(message: String, duration: TimeInterval = 2.0) {
-        guard let container = bannerContainer else { return }
-        
-        // Create banner view
-        let banner = UIView()
-        banner.backgroundColor = UIColor.white
-        banner.layer.cornerRadius = 12
-        banner.layer.shadowColor = UIColor.black.cgColor
-        banner.layer.shadowOffset = CGSize(width: 0, height: 2)
-        banner.layer.shadowOpacity = 0.3
-        banner.layer.shadowRadius = 4
-        
-        // Create label
-        let label = UILabel()
-        label.text = message
-        label.font = UIFont.systemFont(ofSize: 18, weight: .bold)
-        label.textColor = UIColor.black
-        label.textAlignment = .center
-        label.numberOfLines = 0
-        
-        // Add label to banner
-        banner.addSubview(label)
-        label.translatesAutoresizingMaskIntoConstraints = false
-        
-        // Add banner to container
-        container.addSubview(banner)
-        banner.translatesAutoresizingMaskIntoConstraints = false
-        
-        // Add to active banners array
-        activeBanners.append(banner)
-        
-        // Setup constraints
-        NSLayoutConstraint.activate([
-            // Banner constraints
-            banner.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            banner.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            banner.heightAnchor.constraint(equalToConstant: 50),
-            
-            // Label constraints
-            label.leadingAnchor.constraint(equalTo: banner.leadingAnchor, constant: 20),
-            label.trailingAnchor.constraint(equalTo: banner.trailingAnchor, constant: -20),
-            label.topAnchor.constraint(equalTo: banner.topAnchor, constant: 10),
-            label.bottomAnchor.constraint(equalTo: banner.bottomAnchor, constant: -10)
-        ])
-        
-        // Position banner at the bottom of the stack
-        if activeBanners.count > 1 {
-            // Position above the previous banner
-            let previousBanner = activeBanners[activeBanners.count - 2]
-            banner.bottomAnchor.constraint(equalTo: previousBanner.topAnchor, constant: -10).isActive = true
-        } else {
-            // First banner - position at bottom of container
-            banner.bottomAnchor.constraint(equalTo: container.bottomAnchor).isActive = true
-        }
-        
-        // Animate in
-        banner.alpha = 0
-        banner.transform = CGAffineTransform(translationX: 0, y: 50)
-        
-        UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.7, initialSpringVelocity: 0.5, options: [], animations: {
-            banner.alpha = 1
-            banner.transform = .identity
-        })
-        
-        // Animate out after delay
-        DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
-            self.removeBanner(banner)
-        }
-    }
-    
-    // Remove a specific banner
-    private func removeBanner(_ banner: UIView) {
-        UIView.animate(withDuration: 0.3, animations: {
-            banner.alpha = 0
-            banner.transform = CGAffineTransform(translationX: 0, y: -30)
-        }, completion: { _ in
-            banner.removeFromSuperview()
-            if let index = self.activeBanners.firstIndex(of: banner) {
-                self.activeBanners.remove(at: index)
-            }
-        })
     }
     
     // Randomize cells in a radius around a given cell
@@ -1852,7 +1675,7 @@ class GameViewController: UIViewController {
                     // Set delay flag for next rotation step
                     shouldDelayNextRotation = true
                     
-                    showBanner(message: "Squareformer! 🔲")
+                    bannerManager.showBanner(message: "Squareformer! 🔲")
                     break // Only process one new square per rotation
                 }
             }
@@ -2157,7 +1980,7 @@ class GameViewController: UIViewController {
 
     // Restore all original materials with animation
     private func restoreOriginalMaterialsWithAnimation() {
-        for (node, originalMaterial) in originalMaterials {
+        for (node, _) in originalMaterials {
             if let geometry = node.geometry, let material = geometry.firstMaterial {
                 // Animate the color change back to original
                 SCNTransaction.begin()
