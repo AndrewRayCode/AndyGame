@@ -15,6 +15,37 @@ class BannerManager {
     private var congratulationsBanner: UIView?
     private weak var parentView: UIView?
     
+    // MARK: - Marching Ants Border
+    private func addMarchingAntsBorder(to banner: UIView) {
+        // Create dashed border layer
+        let borderLayer = CAShapeLayer()
+        borderLayer.strokeColor = UIColor.white.cgColor
+        borderLayer.fillColor = UIColor.clear.cgColor
+        borderLayer.lineWidth = 2.0
+        borderLayer.lineDashPattern = [6, 4] // 6 points dash, 4 points gap
+        borderLayer.lineCap = .round
+        
+        // Add border layer to banner
+        banner.layer.addSublayer(borderLayer)
+        
+        // Update border path when banner layout changes
+        banner.layoutIfNeeded()
+        updateBorderPath(for: borderLayer, in: banner)
+        
+        // Animate the dash pattern to create marching ants effect
+        let animation = CABasicAnimation(keyPath: "lineDashPhase")
+        animation.fromValue = 0
+        animation.toValue = 10 // Total of dash + gap
+        animation.duration = 0.5
+        animation.repeatCount = .infinity
+        borderLayer.add(animation, forKey: "marchingAnts")
+    }
+    
+    private func updateBorderPath(for borderLayer: CAShapeLayer, in banner: UIView) {
+        let path = UIBezierPath(roundedRect: banner.bounds, cornerRadius: 12)
+        borderLayer.path = path.cgPath
+    }
+    
     // MARK: - Initialization
     init(parentView: UIView) {
         self.parentView = parentView
@@ -99,6 +130,9 @@ class BannerManager {
             banner.bottomAnchor.constraint(equalTo: container.bottomAnchor).isActive = true
         }
         
+        // Add marching ants border
+        addMarchingAntsBorder(to: banner)
+        
         // Animate in
         banner.alpha = 0
         banner.transform = CGAffineTransform(translationX: 0, y: 50)
@@ -113,7 +147,7 @@ class BannerManager {
             self.removeBanner(banner)
         }
     }
-    
+
     // MARK: - Private Methods
     
     /// Remove a specific banner

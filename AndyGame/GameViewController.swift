@@ -357,7 +357,7 @@ class GameViewController: UIViewController {
                 makePipeMaterialsReflective(childPipe)
                 childPipe.position = SCNVector3(
                     x: 0,
-                    y: CYLINDER_HEIGHT / 2,
+                    y: CYLINDER_HEIGHT / 2 + 0.1,
                     z: 0
                 )
                 let childPipeScale = Float(0.25)
@@ -1613,7 +1613,7 @@ class GameViewController: UIViewController {
             // Use SCNTransaction for SceneKit material animations
             SCNTransaction.begin()
             SCNTransaction.animationDuration = duration
-            SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeOut)
             
             // Animate the color change
             material.diffuse.contents = color
