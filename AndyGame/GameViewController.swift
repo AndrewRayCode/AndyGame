@@ -120,7 +120,7 @@ class GameViewController: UIViewController {
     private var squarePipeGreenTimers: [String: Timer] = [:]
     private var squarePipeStartTime: Date?
 
-    private let CYLINDER_COLOR = UIColor(red: 0.1, green: 0.6, blue: 1.0, alpha: 1.0)
+    private let CYLINDER_COLOR = UIColor(red: 0.1, green: 0.4, blue: 1.0, alpha: 1.0)
 
     private let CYLINDER_HAS_ROTATED_COLOR = UIColor(red: 0.1, green: 0.5, blue: 1.0, alpha: 1.0)
     private let CYLINDER_COLOR_HIGHLIGHT = UIColor(red: 0.2, green: 0.7, blue: 1.0, alpha: 1.0)
@@ -192,12 +192,13 @@ class GameViewController: UIViewController {
     
     // Reset button
     private var resetButton: UIButton!
-    
-    // Flower test button
-    private var flowerTestButton: UIButton!
-    
+
     // Camera node reference
     private var cameraNode: SCNNode!
+    
+    // Camera shake properties
+    private var originalCameraPosition: SCNVector3 = SCNVector3(0, 0, 0)
+    private var isShaking = false
     
     // Score tracking
     private var currentScore: Int = 0
@@ -228,6 +229,7 @@ class GameViewController: UIViewController {
         
         // Setup particle system for square breaking
         setupSquareBreakParticleSystem()
+        //addDebugParticleSystem()
         
         // Load environment map
         if let envMap = UIImage(named: "spherical.jpg") {
@@ -275,19 +277,20 @@ class GameViewController: UIViewController {
         updateGridScale()
         
         // create and add a light to the scene - brighter and closer
-//        let lightNode = SCNNode()
-//        lightNode.light = SCNLight()
-//        lightNode.light!.type = .omni
-//        lightNode.light!.intensity = 100 // Brighter light
-//        lightNode.position = SCNVector3(x: -3, y: 20, z: -3)
-//        scene.rootNode.addChildNode(lightNode)
+        let lightNode = SCNNode()
+        lightNode.light = SCNLight()
+        lightNode.light!.type = .omni
+        lightNode.light!.intensity = 200
+        lightNode.position = SCNVector3(x: 0, y: 10, z: 0)
+        lightNode.castsShadow = true
+        scene.rootNode.addChildNode(lightNode)
         
         // create and add an ambient light to the scene - brighter
         let ambientLightNode = SCNNode()
         ambientLightNode.light = SCNLight()
         ambientLightNode.light!.type = .ambient
-        ambientLightNode.light!.intensity = 1000 // Brighter ambient light
-        ambientLightNode.light!.color = UIColor.lightGray
+        ambientLightNode.light!.intensity = 10
+        ambientLightNode.light!.color = UIColor.white
         scene.rootNode.addChildNode(ambientLightNode)
 
         // Load the pipe model
@@ -311,18 +314,18 @@ class GameViewController: UIViewController {
                 // Create cylinder geometry
                 let cylinderGeometry = SCNCylinder(radius: CGFloat(CYLINDER_RADIUS), height: CGFloat(CYLINDER_HEIGHT))
                 
-                // Create material - brighter color
                 let material = SCNMaterial()
-                material.diffuse.contents = UIColor.systemBlue
+                material.diffuse.contents = CYLINDER_COLOR
                 material.specular.contents = UIColor.white
                 material.lightingModel = .physicallyBased
-                material.shininess = 1000
-                material.metalness.contents = 1.0
-                material.roughness.contents = 0.2
+                material.shininess = 100
+                material.metalness.contents = 0.3
+                material.roughness.contents = 0.5
                 cylinderGeometry.materials = [material]
                 
                 // Create cylinder node
                 let cylinderNode = SCNNode(geometry: cylinderGeometry)
+                cylinderNode.castsShadow = true
                 
                 // Position cylinders in a grid
                 // Center the grid around origin
@@ -370,6 +373,10 @@ class GameViewController: UIViewController {
         
         // configure the view
         scnView.backgroundColor = UIColor.black
+        
+        // Enable transparency for particle effects
+        scnView.isJitteringEnabled = true
+        scnView.antialiasingMode = .multisampling4X
         
         // add a tap gesture recognizer
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
@@ -696,35 +703,18 @@ class GameViewController: UIViewController {
         resetButton.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .medium)
         resetButton.addTarget(self, action: #selector(resetBoard), for: .touchUpInside)
         
-        // Create flower test button
-        flowerTestButton = UIButton(type: .system)
-        flowerTestButton.setTitle("Flower Test", for: .normal)
-        flowerTestButton.setTitleColor(.white, for: .normal)
-        flowerTestButton.backgroundColor = UIColor.systemPurple
-        flowerTestButton.layer.cornerRadius = 8
-        flowerTestButton.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .medium)
-        flowerTestButton.addTarget(self, action: #selector(testFlowerFormation), for: .touchUpInside)
-        
         // Add buttons to view
         view.addSubview(resetButton)
-        view.addSubview(flowerTestButton)
         
         // Setup constraints
         resetButton.translatesAutoresizingMaskIntoConstraints = false
-        flowerTestButton.translatesAutoresizingMaskIntoConstraints = false
         
         NSLayoutConstraint.activate([
             // Reset button
             resetButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
             resetButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
             resetButton.widthAnchor.constraint(equalToConstant: 120),
-            resetButton.heightAnchor.constraint(equalToConstant: 44),
-            
-            // Flower test button
-            flowerTestButton.topAnchor.constraint(equalTo: resetButton.bottomAnchor, constant: 10),
-            flowerTestButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
-            flowerTestButton.widthAnchor.constraint(equalToConstant: 120),
-            flowerTestButton.heightAnchor.constraint(equalToConstant: 44)
+            resetButton.heightAnchor.constraint(equalToConstant: 44)
         ])
         
         updateResetButtonState()
@@ -1090,18 +1080,15 @@ class GameViewController: UIViewController {
     
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        
-        // Update grid scale when view layout changes (e.g., safe area changes)
         updateGridScale()
     }
 
-    // Recursively set PBR, metalness, roughness, and diffuse on all materials in a node tree
     private func makePipeMaterialsReflective(_ node: SCNNode) {
         if let geometry = node.geometry {
             for material in geometry.materials {
                 material.lightingModel = .physicallyBased
-                material.metalness.contents = 1.0
-                material.roughness.contents = 0.1
+                material.metalness.contents = 0.8
+                material.roughness.contents = 0.0
                 material.diffuse.contents = UIColor.white
             }
         }
@@ -1359,6 +1346,13 @@ class GameViewController: UIViewController {
                 // Set delay flag for next rotation step
                 shouldDelayNextRotation = true
                 
+                // Trigger camera shake and particle effect for square breaking
+                shakeCamera(duration: 0.1, intensity: 0.05)
+                
+                // Get the center position of the broken square for particle effect
+                let squareCenter = getSquareCenterPosition(square)
+                triggerSquareBreakParticles(at: squareCenter)
+                
                 bannerManager.showCongratulationsBanner()
                 break
             }
@@ -1391,11 +1385,10 @@ class GameViewController: UIViewController {
         }
         
         let centerX = totalX / Float(validPositions)
-        let centerY = totalY / Float(validPositions) + 1.0 // Position above the pipes
+        let centerY = totalY / Float(validPositions)
         let centerZ = totalZ / Float(validPositions)
         
         let finalPosition = SCNVector3(centerX, centerY, centerZ)
-        print("Square center calculated at: \(finalPosition)")
         return finalPosition
     }
     
@@ -1997,27 +1990,108 @@ class GameViewController: UIViewController {
         let particleSystem = SCNParticleSystem()
         
         // Particle appearance - make particles larger and more visible
-        particleSystem.particleSize = 0.01
-        particleSystem.particleColor = UIColor.systemYellow
-        particleSystem.particleColorVariation = SCNVector4(0.3, 0.3, 0.0, 0.2)
+        particleSystem.particleSize = 0.1  // Larger particles
+        particleSystem.particleColor = UIColor(red: 0.1, green: 0, blue: 0, alpha: 0)
+        particleSystem.particleImage = UIImage(named: "star_07.png")
         
+        particleSystem.particleAngularVelocity = 100.0
+        particleSystem.particleAngleVariation = 200.0
+        
+        // Color variation for tinted particles
+        //particleSystem.particleColorVariation = SCNVector4(0.3, 0.3, 0.0, 0.2)
+        
+        particleSystem.emitterShape = SCNBox(
+            width: CGFloat(CYLINDER_RADIUS),
+            height: CGFloat(CYLINDER_HEIGHT),
+            length: CGFloat(CYLINDER_RADIUS),
+            chamferRadius: 0.0
+        )
+        particleSystem.birthDirection = .surfaceNormal
+        //particleSystem.birthDirection = .random
+
         // Particle behavior
-        particleSystem.particleLifeSpan = 2.0
-        particleSystem.particleLifeSpanVariation = 0.5
-        particleSystem.emissionDuration = 0.5
-        particleSystem.spreadingAngle = 90.0  // Wider spread
-        particleSystem.acceleration = SCNVector3(0, -1.0, 0) // Lighter gravity
+        particleSystem.particleVelocity = 0.4
+        particleSystem.particleVelocityVariation = 0.1
+        particleSystem.particleLifeSpan = 1.2
+        particleSystem.particleLifeSpanVariation = 0.1
+        particleSystem.emissionDuration = 0.1
+        //particleSystem.spreadingAngle = 90.0  // Wider spread
+        //particleSystem.acceleration = SCNVector3(0, -2.0, 0) // Lighter gravity
+        particleSystem.blendMode = .additive
+        //particleSystem.sortingMode = .projectedDepth
         
         // Emission properties - use volume instead of surface
         particleSystem.birthRate = 100
         particleSystem.birthLocation = .volume
-        particleSystem.birthDirection = .random
+        //particleSystem.birthDirection = .random
         
         // Size variation over time
         particleSystem.particleSizeVariation = 0.1
         
         // Store the particle system
         squareBreakParticleSystem = particleSystem
+    }
+
+    // Add debug particle system at center of screen
+    private func addDebugParticleSystem() {
+        guard let particleSystem = squareBreakParticleSystem?.copy() as? SCNParticleSystem else { 
+            print("Failed to copy particle system for debug")
+            return 
+        }
+        
+        // Create a node to hold the particle system
+        let debugParticleNode = SCNNode()
+        debugParticleNode.position = SCNVector3(0, 2, 0) // Position at center, elevated
+        
+        // Add the particle system to the node
+        debugParticleNode.addParticleSystem(particleSystem)
+        
+        // Add to scene
+        scene.rootNode.addChildNode(debugParticleNode)
+        
+        print("Debug particle system added at position: (0, 2, 0)")
+    }
+    
+    
+    // Camera shake function
+    private func shakeCamera(duration: TimeInterval = 0.1, intensity: Float = 0.1) {
+        guard !isShaking else { return } // Prevent multiple shakes
+        
+        isShaking = true
+        originalCameraPosition = cameraNode.position
+        
+        let shakeCount = Int(duration * 60) // 60 FPS
+        var currentShake = 0
+        
+        let shakeTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { timer in
+            currentShake += 1
+            
+            // Create random offset for shake
+            let randomX = Float.random(in: -intensity...intensity)
+            let randomY = Float.random(in: -intensity...intensity)
+            let randomZ = Float.random(in: -intensity...intensity)
+            
+            // Apply shake offset
+            self.cameraNode.position = SCNVector3(
+                self.originalCameraPosition.x + randomX,
+                self.originalCameraPosition.y + randomY,
+                self.originalCameraPosition.z + randomZ
+            )
+            
+            // Stop shaking when duration is complete
+            if currentShake >= shakeCount {
+                timer.invalidate()
+                
+                // Smoothly return to original position
+                SCNTransaction.begin()
+                SCNTransaction.animationDuration = 0.05
+                SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeOut)
+                self.cameraNode.position = self.originalCameraPosition
+                SCNTransaction.commit()
+                
+                self.isShaking = false
+            }
+        }
     }
     
     // Trigger particle effect at a specific position
@@ -2040,7 +2114,7 @@ class GameViewController: UIViewController {
         print("Particle effect triggered at position: \(position)")
         
         // Remove the particle node after the effect is complete
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             particleNode.removeFromParentNode()
             print("Particle node removed")
         }
