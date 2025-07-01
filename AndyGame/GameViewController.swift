@@ -94,6 +94,28 @@ class GameViewController: UIViewController {
     private let CYLINDER_RADIUS: Float = 0.5
     private let CYLINDER_HEIGHT: Float = 0.5
 
+    private let CYLINDER_COLOR = UIColor(red: 0.1, green: 0.4, blue: 1.0, alpha: 1.0)
+
+    private let CYLINDER_HAS_ROTATED_COLOR = UIColor(red: 0.1, green: 0.5, blue: 1.0, alpha: 1.0)
+    private let CYLINDER_COLOR_HIGHLIGHT = UIColor(red: 0.2, green: 0.6, blue: 1.0, alpha: 1.0)
+
+    private let SQUARE_HIGHLIGHT_COLOR = UIColor(red: 0.2, green: 0.7, blue: 1.0, alpha: 1.0)
+    private let SQUARE_DISABLED_COLOR = UIColor(red: 0.5, green: 0.5, blue: 0.7, alpha: 1.0)
+    
+    private let PIPE_ROTATING_COLOR = UIColor(red: 1.0, green: 0.1, blue: 0.2, alpha: 1.0)
+
+    private let SQUARE_CLICK_MIN_WAIT = 1.0
+    private let SQUARE_CLICK_MAX_WAIT = 2.0
+    private let SQAURE_CLICK_TIMEOUT = 5.0
+    
+    private let LAST_CHANCE_TIME = 5.0
+    private let ROTATION_DURATION = 0.3
+    private let FLOWER_CLICK_MAX_WAIT = 3.0
+    
+    // Pause for effect in (at least) square breaker
+    private let ROTATION_COMPLETION_DELAY = 0.5
+    
+    
     // 2D array to store rotation states for each cylinder
     var rotationStates: [[Int]] = []
     
@@ -120,25 +142,6 @@ class GameViewController: UIViewController {
     private var squarePipeGreenTimers: [String: Timer] = [:]
     private var squarePipeStartTime: Date?
 
-    private let CYLINDER_COLOR = UIColor(red: 0.1, green: 0.4, blue: 1.0, alpha: 1.0)
-
-    private let CYLINDER_HAS_ROTATED_COLOR = UIColor(red: 0.1, green: 0.5, blue: 1.0, alpha: 1.0)
-    private let CYLINDER_COLOR_HIGHLIGHT = UIColor(red: 0.2, green: 0.6, blue: 1.0, alpha: 1.0)
-
-    private let SQUARE_HIGHLIGHT_COLOR = UIColor(red: 0.2, green: 0.7, blue: 1.0, alpha: 1.0)
-    private let SQUARE_DISABLED_COLOR = UIColor(red: 0.5, green: 0.5, blue: 0.7, alpha: 1.0)
-
-    private let SQUARE_CLICK_MIN_WAIT = 1.0
-    private let SQUARE_CLICK_MAX_WAIT = 2.0
-    private let SQAURE_CLICK_TIMEOUT = 5.0
-    
-    private let LAST_CHANCE_TIME = 5.0
-    private let ROTATION_DURATION = 0.3
-    private let FLOWER_CLICK_MAX_WAIT = 3.0
-    
-    // Pause for effect in (at least) square breaker
-    private let ROTATION_COMPLETION_DELAY = 0.5
-    
     // Track clicked squares for next rotation
     private var clickedSquares: [[CellPosition]] = []
     
@@ -1281,7 +1284,7 @@ class GameViewController: UIViewController {
         squarePipeGreenTimers.removeValue(forKey: squareKey)
     }
     
-    // Highlight a pipe as rotating (pink color)
+    // Highlight a pipe as rotating
     private func highlightRotatingPipe(_ pipe: CellPosition) {
         guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
         
@@ -1294,7 +1297,7 @@ class GameViewController: UIViewController {
                 originalMaterials[cylinderNode] = originalMaterial
             }
             // Use instant color change for rotation highlighting to prevent pulsing
-            material.diffuse.contents = UIColor.systemPink
+            material.diffuse.contents = PIPE_ROTATING_COLOR
         }
     }
     
@@ -1307,7 +1310,7 @@ class GameViewController: UIViewController {
         
         guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
         
-        // Check if this pipe was in the original materials (pink during rotation)
+        // Check if this pipe was in the original materials
         if let originalMaterial = originalMaterials[cylinderNode] {
             animateColorChange(for: pipe, to: originalMaterial.diffuse.contents as? UIColor ?? CYLINDER_COLOR, duration: 0.2)
         } else {
@@ -1327,10 +1330,6 @@ class GameViewController: UIViewController {
         // Find which square this pipe belongs to and deactivate the entire square
         for square in pipeSquares {
             if square.contains(pipe) {
-                // Trigger particle effect at the center of the square
-                let centerPosition = getSquareCenterPosition(square)
-                triggerSquareBreakParticles(at: centerPosition)
-                
                 // Mark all pipes in this square as clicked
                 for squarePipe in square {
                     clickedSquarePipes.insert(squarePipe)
@@ -1349,17 +1348,12 @@ class GameViewController: UIViewController {
                     clickedSquares.append(square)
                 }
                 
-                // Set delay flag for next rotation step
                 shouldDelayNextRotation = true
-                
-                // Trigger camera shake and particle effect for square breaking
+                let centerPosition = getSquareCenterPosition(square)
+                triggerSquareBreakParticles(at: centerPosition)
                 shakeCamera(duration: 0.1, intensity: 0.05)
-                
-                // Get the center position of the broken square for particle effect
-                let squareCenter = getSquareCenterPosition(square)
-                triggerSquareBreakParticles(at: squareCenter)
-                
-                bannerManager.showCongratulationsBanner()
+                bannerManager.showBanner(message: "Squarebreaker!")
+
                 break
             }
         }
@@ -1674,6 +1668,9 @@ class GameViewController: UIViewController {
                     // Set delay flag for next rotation step
                     shouldDelayNextRotation = true
                     
+                    let centerPosition = getSquareCenterPosition(newSquare)
+                    triggerSquareBreakParticles(at: centerPosition)
+                    shakeCamera(duration: 0.1, intensity: 0.05)
                     bannerManager.showBanner(message: "Squareformer! 🔲")
                     break // Only process one new square per rotation
                 }
@@ -1830,9 +1827,6 @@ class GameViewController: UIViewController {
                 let cellCol = area.startCol + col
                 let cell = CellPosition(row: cellRow, col: cellCol)
                 clickableFlowerCells.insert(cell)
-                
-                // Highlight flower cells (use a distinct color like pink)
-                //animateColorChange(for: cell, to: UIColor.systemPink, duration: 0.3)
                 animateCellYPosition(for: cell, towardCamera: true, duration: 0.3)
             }
         }
@@ -2114,8 +2108,6 @@ class GameViewController: UIViewController {
         
         // Add to scene
         scene.rootNode.addChildNode(debugParticleNode)
-        
-        print("Debug particle system added at position: (0, 2, 0)")
     }
     
     
@@ -2194,18 +2186,12 @@ class GameViewController: UIViewController {
         let particleNode = SCNNode()
         particleNode.position = position
         
-        // Add the particle system to the node
         particleNode.addParticleSystem(particleSystem)
-        
-        // Add to scene
         scene.rootNode.addChildNode(particleNode)
-        
-        print("Particle effect triggered at position: \(position)")
         
         // Remove the particle node after the effect is complete
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             particleNode.removeFromParentNode()
-            print("Particle node removed")
         }
     }
 }
