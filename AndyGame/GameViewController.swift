@@ -103,6 +103,7 @@ class GameViewController: UIViewController {
     private let SQUARE_DISABLED_COLOR = UIColor(red: 0.5, green: 0.5, blue: 0.7, alpha: 1.0)
     
     private let PIPE_ROTATING_COLOR = UIColor(red: 1.0, green: 0.1, blue: 0.2, alpha: 1.0)
+    private let WILD_CARD_COLOR = UIColor(red: 0.8, green: 0.2, blue: 0.8, alpha: 1.0)
 
     private let SQUARE_CLICK_MIN_WAIT = 1.0
     private let SQUARE_CLICK_MAX_WAIT = 2.0
@@ -203,6 +204,13 @@ class GameViewController: UIViewController {
     // Camera shake properties
     private var originalCameraPosition: SCNVector3 = SCNVector3(0, 0, 0)
     private var isShaking = false
+    
+    // Wild card spinning cell properties
+    private var wildCardCell: CellPosition?
+    private var wildCardSpinning = false
+    private var wildCardActive = false
+    private var wildCardAutoRotationsRemaining = 0
+    private var wildCardSpinningTimer: DispatchWorkItem?
     
     // Score tracking
     private var currentScore: Int = 0
@@ -449,6 +457,13 @@ class GameViewController: UIViewController {
                 return
             }
             
+            // Check if this is a wild card cell click during spinning
+            if wildCardSpinning && wildCardCell == position && !wildCardActive {
+                // Handle wild card activation
+                handleWildCardActivation(position)
+                return
+            }
+            
             // User clicked the flower in time!
             if clickableFlowerCells.contains(position) {
                 shouldDelayNextRotation = true
@@ -510,9 +525,16 @@ class GameViewController: UIViewController {
         }
         
         // 1 in 10 chance to trigger flower formation
-        if Int.random(in: 1...10) == 1 {
-            triggerFlowerFormation()
+//        if Int.random(in: 1...10) == 1 {
+//            triggerFlowerFormation()
+//        }
+        
+        if wildCardCell == nil && Int.random(in: 1...10) > 5 {
+            triggerWildCardSpinning()
         }
+        
+        // Handle active wild card auto-rotation
+        handleActiveWildCardAutoRotation()
         
         // Pop open the square
         for square in squareCellsToExpand {
@@ -611,6 +633,12 @@ class GameViewController: UIViewController {
             // Check if neighbor exists on the board
             guard ny >= 0 && ny < GRID_ROWS && 
                   nx >= 0 && nx < GRID_COLS else { continue }
+            
+            // Skip if this neighbor is the wild card cell that's currently spinning
+            let neighborCell = CellPosition(row: ny, col: nx)
+            if wildCardCell == neighborCell && wildCardSpinning {
+                continue
+            }
             
             let neighbor = getRotation(unboundedRotation: rotationStates[ny][nx])
             
@@ -796,6 +824,9 @@ class GameViewController: UIViewController {
         
         // Clear any flower cells that need rotation
         flowerCellsToRotate.removeAll()
+        
+        // Cancel any active wild card spinning
+        cancelWildCardSpinning()
         
         resetCurrentScore()
     }
@@ -1459,10 +1490,23 @@ class GameViewController: UIViewController {
     
     // Trigger last chance mechanic
     private func triggerLastChance() {
-        // Select a random cell on the board
-        let randomRow = Int.random(in: 1..<GRID_ROWS-1)
-        let randomCol = Int.random(in: 1..<GRID_COLS-1)
-        let randomCell = CellPosition(row: randomRow, col: randomCol)
+        // Find available cells that are not expired (gray)
+        var availableCells: [CellPosition] = []
+        for row in 1..<GRID_ROWS-1 {
+            for col in 1..<GRID_COLS-1 {
+                let cell = CellPosition(row: row, col: col)
+                // Only include cells that are not expired
+                if !expiredSquares.contains(cell) {
+                    availableCells.append(cell)
+                }
+            }
+        }
+        
+        // If no available cells, don't trigger last chance
+        guard !availableCells.isEmpty else { return }
+        
+        // Select a random cell from available cells
+        let randomCell = availableCells.randomElement()!
         
         // Store the last chance cell
         lastChanceCell = randomCell
@@ -2110,6 +2154,149 @@ class GameViewController: UIViewController {
         scene.rootNode.addChildNode(debugParticleNode)
     }
     
+    
+    // Wild card spinning cell function
+    private func triggerWildCardSpinning() {
+        // Find a random cell that's not currently rotating and not on edges
+        var availableCells: [CellPosition] = []
+        for row in 1..<GRID_ROWS-1 {
+            for col in 1..<GRID_COLS-1 {
+                let cell = CellPosition(row: row, col: col)
+                // Check if cell is not in current rotating cells
+                if !currentRotatingCells.contains(cell) {
+                    availableCells.append(cell)
+                }
+            }
+        }
+        
+        guard !availableCells.isEmpty else { return }
+        
+        // Select random cell
+        let selectedCell = availableCells.randomElement()!
+        wildCardCell = selectedCell
+        wildCardSpinning = true
+        
+        // Animate color change to purple and lift up
+        animateColorChange(for: selectedCell, to: WILD_CARD_COLOR, duration: 0.3)
+        animateCellYPosition(for: selectedCell, towardCamera: true, duration: 0.3)
+        
+        // Start spinning animation (3 full rotations = 12 quarter turns)
+        let spinDuration = 6.0
+        let totalRotations = 12
+        
+        // Animate the spinning
+        SCNTransaction.begin()
+        SCNTransaction.animationDuration = spinDuration
+        SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .linear)
+        
+        // Add 12 quarter turns to the rotation state
+        rotationStates[selectedCell.row][selectedCell.col] += totalRotations
+        
+        // Get the cylinder node and animate its rotation
+        if let cylinderNode = findCylinderNode(at: selectedCell.row, col: selectedCell.col) {
+            let finalRotation = Float(rotationStates[selectedCell.row][selectedCell.col]) * -Float.pi / 2
+            cylinderNode.eulerAngles.y = finalRotation
+        }
+        
+        SCNTransaction.commit()
+        
+        // Return to normal state after spinning
+        let timer = DispatchWorkItem {
+            self.completeWildCardSpinning()
+        }
+        wildCardSpinningTimer = timer
+        DispatchQueue.main.asyncAfter(deadline: .now() + spinDuration, execute: timer)
+    }
+    
+        // Handle wild card activation when clicked during spinning
+    private func handleWildCardActivation(_ cell: CellPosition) {
+        // Cancel the spinning timer
+        wildCardSpinningTimer?.cancel()
+        wildCardSpinningTimer = nil
+        
+        // Stop the spinning animation immediately
+        if let cylinderNode = findCylinderNode(at: cell.row, col: cell.col) {
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = 0.1
+            cylinderNode.eulerAngles.y = Float(rotationStates[cell.row][cell.col]) * -Float.pi / 2
+            SCNTransaction.commit()
+        }
+        
+        // Set wild card as active
+        wildCardActive = true
+        wildCardAutoRotationsRemaining = 3
+        
+        // Return to normal position but keep purple color
+        //animateCellYPosition(for: cell, towardCamera: false, duration: 0.3)
+        
+        // Stop the spinning timer
+        wildCardSpinning = false
+        
+        print("---- starting rotation")
+        bannerManager.showBanner(message: "Auto rotator!")
+    }
+    
+    // Cancel wild card spinning (used when game resets or cell is activated)
+    private func cancelWildCardSpinning() {
+        // Cancel the spinning timer
+        wildCardSpinningTimer?.cancel()
+        wildCardSpinningTimer = nil
+        
+        // If there is a wild card cell, reset its color and position
+        if let cell = wildCardCell {
+            animateColorChange(for: cell, to: CYLINDER_COLOR, duration: 0.3)
+            animateCellYPosition(for: cell, towardCamera: false, duration: 0.3)
+        }
+        
+        // Reset wild card state
+        wildCardCell = nil
+        wildCardSpinning = false
+        wildCardActive = false
+        wildCardAutoRotationsRemaining = 0
+    }
+    
+    // Handle active wild card auto-rotation
+    private func handleActiveWildCardAutoRotation() {
+        guard wildCardActive, let cell = wildCardCell, wildCardAutoRotationsRemaining > 0 else { return }
+        
+        print("rotate fun \(wildCardAutoRotationsRemaining)")
+        
+        // Decrement remaining rotations
+        wildCardAutoRotationsRemaining -= 1
+        
+        // Rotate the active wild card cell
+        rotationStates[cell.row][cell.col] += 1
+        animatePipeRotation(cell: cell, targetRotation: rotationStates[cell.row][cell.col])
+        
+        // Add score for the auto-rotation
+        addToScore(1)
+        
+        // If this was the last auto-rotation, reset the wild card
+        if wildCardAutoRotationsRemaining == 0 {
+            // Return to normal blue color
+            animateColorChange(for: cell, to: CYLINDER_COLOR, duration: 0.3)
+            animateCellYPosition(for: cell, towardCamera: false, duration: 0.3)
+            
+            // Clear wild card state
+            wildCardCell = nil
+            wildCardActive = false
+        }
+    }
+    
+    // Complete wild card spinning and return to normal
+    private func completeWildCardSpinning() {
+        guard let cell = wildCardCell else { return }
+        
+        // Return to normal blue color and position
+        animateColorChange(for: cell, to: CYLINDER_COLOR, duration: 0.3)
+        animateCellYPosition(for: cell, towardCamera: false, duration: 0.3)
+        
+        // Clear wild card state
+        wildCardCell = nil
+        wildCardSpinning = false
+        wildCardActive = false
+        wildCardAutoRotationsRemaining = 0
+    }
     
     // Camera shake function
     private func shakeCamera(duration: TimeInterval = 0.1, intensity: Float = 0.1) {
