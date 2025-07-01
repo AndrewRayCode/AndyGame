@@ -103,7 +103,8 @@ class GameViewController: UIViewController {
     private let SQUARE_DISABLED_COLOR = UIColor(red: 0.5, green: 0.5, blue: 0.7, alpha: 1.0)
     
     private let PIPE_ROTATING_COLOR = UIColor(red: 1.0, green: 0.1, blue: 0.2, alpha: 1.0)
-    private let WILD_CARD_COLOR = UIColor(red: 0.8, green: 0.2, blue: 0.8, alpha: 1.0)
+    //private let WILD_CARD_COLOR = UIColor(red: 0.8, green: 0.2, blue: 0.8, alpha: 1.0)
+    private let WILD_CARD_COLOR = UIColor(red: 1.0, green: 1.0, blue: 0.0, alpha: 1.0)
 
     private let SQUARE_CLICK_MIN_WAIT = 1.0
     private let SQUARE_CLICK_MAX_WAIT = 2.0
@@ -127,7 +128,7 @@ class GameViewController: UIViewController {
     var isRotating = false
     
     // Store original materials to restore after rotation
-    var originalMaterials: [SCNNode: SCNMaterial] = [:]
+    //var originalMaterials: [SCNNode: SCNMaterial] = [:]
     
     // Completion tracking for animations
     private var animationCompletionCount = 0
@@ -525,11 +526,13 @@ class GameViewController: UIViewController {
         }
         
         // 1 in 10 chance to trigger flower formation
-//        if Int.random(in: 1...10) == 1 {
-//            triggerFlowerFormation()
-//        }
+       if Int.random(in: 1...10) == 1 {
+           triggerFlowerFormation()
+       }
         
-        if wildCardCell == nil && Int.random(in: 1...10) > 5 {
+        if wildCardCell == nil {
+        //if wildCardCell == nil && Int.random(in: 1...10) > 5 {
+            print("new wildcard spin")
             triggerWildCardSpinning()
         }
         
@@ -569,6 +572,7 @@ class GameViewController: UIViewController {
         // has popped open, but there will be nothing left in cells to animate.
         // So manually fire the next step
         if filteredCells.count == 0 && squareCells.count > 0 {
+            currentRotatingCells = cellsInSquares
             DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_TIME) {
                 self.onRotationComplete(rotatedCells: cellsInSquares)
             }
@@ -688,25 +692,30 @@ class GameViewController: UIViewController {
         let uniqueNeighbors = Array(Set(newNeighborsToRotate))
         
         let allCellsToRotate = uniqueNeighbors + flowerCellsForRotation
-        
+        let newSquares = clickedSquareCells + newlyFormedSquareCells
+
+        // Find the cells to reset, which is the rotated cells that don't appear
+        // in newNeighborsToRotate, don't appear in squares, don't appear in
+        // newSquares.
+        let cellsToReset = rotatedCells.filter { cell in
+            !newNeighborsToRotate.contains(cell) &&
+            !newSquares.contains { square in
+                square.contains(cell)
+            }
+        }
+
         if allCellsToRotate.count > 0 {
             addToScore(allCellsToRotate.count)
             
             // Check if we should delay the next rotation
-            if shouldDelayNextRotation {
-                shouldDelayNextRotation = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_COMPLETION_DELAY) {
-                    self.rotateCells(allCellsToRotate, clickedSquareCells + newlyFormedSquareCells)
-                }
-            } else {
-                // Restore all original materials when rotation chain is completely finished
-                restoreOriginalMaterialsWithAnimation()
-                rotateCells(allCellsToRotate, clickedSquareCells + newlyFormedSquareCells)
+            DispatchQueue.main.asyncAfter(deadline: .now() + (shouldDelayNextRotation ? ROTATION_COMPLETION_DELAY : 0)) {
+                self.shouldDelayNextRotation = false
+                self.setCellsToHasRotatedColor(cells: cellsToReset)
+                self.rotateCells(allCellsToRotate, newSquares)
             }
         } else {
-            restoreOriginalMaterialsWithAnimation()
+            setCellsToHasRotatedColor(cells: rotatedCells)
             isRotating = false
-            originalMaterials.removeAll()
             updateResetButtonState()
             
             // Stop square pipe interaction when rotation ends
@@ -723,6 +732,9 @@ class GameViewController: UIViewController {
             if activeFlower != nil {
                 clearActiveFlower()
             }
+            
+            // Cancel any active wild card spinning when rotations end
+            cancelWildCardSpinning()
             
             // Chance to trigger last chance mechanic
             if Int.random(in: 1...10) > 8 && remainingMoves < 4 {
@@ -1237,7 +1249,7 @@ class GameViewController: UIViewController {
         
         // Clear clickable pipes and reset colors (but not gray pipes)
         for pipe in clickableSquarePipes {
-            resetPipeColor(pipe)
+            resetPipeColorAndHeight(pipe)
         }
         clickableSquarePipes.removeAll()
         
@@ -1320,36 +1332,19 @@ class GameViewController: UIViewController {
         guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
         
         if let geometry = cylinderNode.geometry, let material = geometry.firstMaterial {
-            // Store original material only if we haven't stored it yet in this rotation cycle
-            if originalMaterials[cylinderNode] == nil {
-                // Store the true original color (blue) regardless of current color
-                let originalMaterial = material.copy() as? SCNMaterial
-                originalMaterial?.diffuse.contents = CYLINDER_COLOR
-                originalMaterials[cylinderNode] = originalMaterial
-            }
-            // Use instant color change for rotation highlighting to prevent pulsing
             material.diffuse.contents = PIPE_ROTATING_COLOR
         }
     }
     
     // Reset a pipe's color to its original state
-    private func resetPipeColor(_ pipe: CellPosition) {
+    private func resetPipeColorAndHeight(_ pipe: CellPosition) {
         // Don't reset gray pipes unless the board is being reset
         if expiredSquares.contains(pipe) {
             return
         }
         
         guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
-        
-        // Check if this pipe was in the original materials
-        if let originalMaterial = originalMaterials[cylinderNode] {
-            animateColorChange(for: pipe, to: originalMaterial.diffuse.contents as? UIColor ?? CYLINDER_COLOR, duration: 0.2)
-        } else {
-            // Reset to default blue
-            animateColorChange(for: pipe, to: CYLINDER_COLOR, duration: 0.2)
-        }
-        
-        // Animate back to original position
+        animateColorChange(for: pipe, to: CYLINDER_COLOR, duration: 0.2)
         animateCellYPosition(for: pipe, towardCamera: false, duration: 0.3)
     }
     
@@ -1531,11 +1526,8 @@ class GameViewController: UIViewController {
         guard let cell = lastChanceCell else { return }
         
         // Reset the cell color
-        resetPipeColor(cell)
-        
-        // Animate back to original position
-        animateCellYPosition(for: cell, towardCamera: false, duration: 0.3)
-        
+        resetPipeColorAndHeight(cell)
+
         // Clear tracking
         lastChanceCell = nil
         lastChanceTimer = nil
@@ -1921,26 +1913,26 @@ class GameViewController: UIViewController {
         }
         let scale = gridGroupNode.scale
 
-         return SCNVector3(
+        return SCNVector3(
             (topLeftCylinder.position.x + Float(CYLINDER_RADIUS) * 4.0 - Float(CYLINDER_RADIUS)) * scale.x,
             (topLeftCylinder.position.y + Float(CYLINDER_HEIGHT / 2.0)) * scale.y,
             (topLeftCylinder.position.z + Float(CYLINDER_RADIUS) * 4.0 - Float(CYLINDER_RADIUS)) * scale.z,
-         )
+        )
     }
     
     // Pop flower open with the specified pattern
     private func popFlowerOpen(area: (startRow: Int, startCol: Int)) {
         /**
          * Start:
-         * .┌┐.
+         *  ┌┐ 
          * ┌┘└┐
          * └┐┌┘
-         * .└┘.
+         *  └┘ 
          * Goal:
-         * .└┘.
+         *  └┘ 
          * ┐┌┐┌
          * ┘└┘└
-         * .┌┐.
+         *  ┌┐ 
          */
         
         for row in 0..<4 {
@@ -2028,17 +2020,9 @@ class GameViewController: UIViewController {
         return currentUnbounded + adjustedDiff
     }
 
-    // Restore all original materials with animation
-    private func restoreOriginalMaterialsWithAnimation() {
-        for (node, _) in originalMaterials {
-            if let geometry = node.geometry, let material = geometry.firstMaterial {
-                // Animate the color change back to original
-                SCNTransaction.begin()
-                SCNTransaction.animationDuration = 0.3
-                SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .easeOut)
-                material.diffuse.contents = CYLINDER_HAS_ROTATED_COLOR
-                SCNTransaction.commit()
-            }
+    private func setCellsToHasRotatedColor(cells: [CellPosition]) {
+        for cell in cells {
+            animateColorChange(for: cell, to: CYLINDER_HAS_ROTATED_COLOR, duration: 0.3)
         }
     }
     
@@ -2157,13 +2141,15 @@ class GameViewController: UIViewController {
     
     // Wild card spinning cell function
     private func triggerWildCardSpinning() {
-        // Find a random cell that's not currently rotating and not on edges
+        // Find a random cell that's not currently rotating, not on edges, not expired, and not in flowers
         var availableCells: [CellPosition] = []
         for row in 1..<GRID_ROWS-1 {
             for col in 1..<GRID_COLS-1 {
                 let cell = CellPosition(row: row, col: col)
-                // Check if cell is not in current rotating cells
-                if !currentRotatingCells.contains(cell) {
+                // Check if cell is not in current rotating cells, not expired, and not in flowers
+                if !currentRotatingCells.contains(cell) && 
+                   !expiredSquares.contains(cell) && 
+                   !clickableFlowerCells.contains(cell) {
                     availableCells.append(cell)
                 }
             }
@@ -2181,8 +2167,8 @@ class GameViewController: UIViewController {
         animateCellYPosition(for: selectedCell, towardCamera: true, duration: 0.3)
         
         // Start spinning animation (3 full rotations = 12 quarter turns)
-        let spinDuration = 6.0
-        let totalRotations = 12
+        let spinDuration = 4.0
+        let totalRotations = 4
         
         // Animate the spinning
         SCNTransaction.begin()
@@ -2224,7 +2210,7 @@ class GameViewController: UIViewController {
         
         // Set wild card as active
         wildCardActive = true
-        wildCardAutoRotationsRemaining = 3
+        wildCardAutoRotationsRemaining = 10
         
         // Return to normal position but keep purple color
         //animateCellYPosition(for: cell, towardCamera: false, duration: 0.3)
