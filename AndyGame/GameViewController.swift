@@ -123,7 +123,7 @@ class GameViewController: UIViewController {
     private let CYLINDER_COLOR = UIColor(red: 0.1, green: 0.4, blue: 1.0, alpha: 1.0)
 
     private let CYLINDER_HAS_ROTATED_COLOR = UIColor(red: 0.1, green: 0.5, blue: 1.0, alpha: 1.0)
-    private let CYLINDER_COLOR_HIGHLIGHT = UIColor(red: 0.2, green: 0.7, blue: 1.0, alpha: 1.0)
+    private let CYLINDER_COLOR_HIGHLIGHT = UIColor(red: 0.2, green: 0.6, blue: 1.0, alpha: 1.0)
 
     private let SQUARE_HIGHLIGHT_COLOR = UIColor(red: 0.2, green: 0.7, blue: 1.0, alpha: 1.0)
     private let SQUARE_DISABLED_COLOR = UIColor(red: 0.5, green: 0.5, blue: 0.7, alpha: 1.0)
@@ -184,8 +184,9 @@ class GameViewController: UIViewController {
         [nil, 0, 3, nil]       // [don't rotate, .zero, .three, don't rotate]
     ]
     
-    // Particle system for square breaking effects
+    // Partikles
     private var squareBreakParticleSystem: SCNParticleSystem?
+    private var flowerParticleSystem: SCNParticleSystem?
     
     // Banner manager
     private var bannerManager: BannerManager!
@@ -229,6 +230,7 @@ class GameViewController: UIViewController {
         
         // Setup particle system for square breaking
         setupSquareBreakParticleSystem()
+        setupFlowerParticleSystem()
         //addDebugParticleSystem()
         
         // Load environment map
@@ -449,6 +451,10 @@ class GameViewController: UIViewController {
                 shouldDelayNextRotation = true
                 
                 bannerManager.showBanner(message: "Flower breaker!")
+
+                triggerFlowerParticles(at: getFlowerCenterPosition(area: activeFlower!.area))
+
+                shakeCamera(duration: 0.1, intensity: 0.05)
 
                 // Pop the flower open with the specified pattern
                 popFlowerOpen(area: activeFlower!.area)
@@ -1870,6 +1876,19 @@ class GameViewController: UIViewController {
             }
         }
     }
+
+    private func getFlowerCenterPosition(area: (startRow: Int, startCol: Int)) -> SCNVector3 {
+        guard let topLeftCylinder = findCylinderNode(at: area.startRow, col: area.startCol) else {
+            return SCNVector3(0.0, 0.0, 0.0)
+        }
+        let scale = gridGroupNode.scale
+
+         return SCNVector3(
+            (topLeftCylinder.position.x + Float(CYLINDER_RADIUS) * 4.0 - Float(CYLINDER_RADIUS)) * scale.x,
+            (topLeftCylinder.position.y + Float(CYLINDER_HEIGHT / 2.0)) * scale.y,
+            (topLeftCylinder.position.z + Float(CYLINDER_RADIUS) * 4.0 - Float(CYLINDER_RADIUS)) * scale.z,
+         )
+    }
     
     // Pop flower open with the specified pattern
     private func popFlowerOpen(area: (startRow: Int, startCol: Int)) {
@@ -1984,6 +2003,53 @@ class GameViewController: UIViewController {
             }
         }
     }
+    
+    // Setup particle system for square breaking effects
+    private func setupFlowerParticleSystem() {
+        let particleSystem = SCNParticleSystem()
+        
+        // Particle appearance - make particles larger and more visible
+        particleSystem.particleSize = 0.1  // Larger particles
+        particleSystem.particleColor = UIColor(red: 0.1, green: 0, blue: 0, alpha: 0)
+        particleSystem.particleImage = UIImage(named: "circle_05.png")
+        
+        particleSystem.particleAngularVelocity = 100.0
+        particleSystem.particleAngleVariation = 200.0
+        
+        // Color variation for tinted particles
+        //particleSystem.particleColorVariation = SCNVector4(0.3, 0.3, 0.0, 0.2)
+        
+        particleSystem.emitterShape = SCNBox(
+            width: CGFloat(CYLINDER_RADIUS) * 4.0,
+            height: CGFloat(CYLINDER_HEIGHT),
+            length: CGFloat(CYLINDER_RADIUS) * 4.0,
+            chamferRadius: 0.0
+        )
+        particleSystem.birthDirection = .surfaceNormal
+        //particleSystem.birthDirection = .random
+
+        // Particle behavior
+        particleSystem.particleVelocity = 0.4
+        particleSystem.particleVelocityVariation = 0.1
+        particleSystem.particleLifeSpan = 1.2
+        particleSystem.particleLifeSpanVariation = 0.1
+        particleSystem.emissionDuration = 0.1
+        //particleSystem.spreadingAngle = 90.0  // Wider spread
+        //particleSystem.acceleration = SCNVector3(0, -2.0, 0) // Lighter gravity
+        particleSystem.blendMode = .additive
+        //particleSystem.sortingMode = .projectedDepth
+        
+        // Emission properties - use volume instead of surface
+        particleSystem.birthRate = 100
+        particleSystem.birthLocation = .volume
+        //particleSystem.birthDirection = .random
+        
+        // Size variation over time
+        particleSystem.particleSizeVariation = 0.1
+        
+        // Store the particle system
+        flowerParticleSystem = particleSystem
+    }
 
     // Setup particle system for square breaking effects
     private func setupSquareBreakParticleSystem() {
@@ -2094,6 +2160,29 @@ class GameViewController: UIViewController {
         }
     }
     
+
+    private func triggerFlowerParticles(at position: SCNVector3) {
+        guard let particleSystem = flowerParticleSystem?.copy() as? SCNParticleSystem else { 
+            print("Failed to copy particle system")
+            return
+        }
+
+        // Create a node to hold the particle system
+        let particleNode = SCNNode()
+        particleNode.position = position
+        
+        // Add the particle system to the node
+        particleNode.addParticleSystem(particleSystem)
+        
+        // Add to scene
+        scene.rootNode.addChildNode(particleNode)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            particleNode.removeFromParentNode()
+        }
+    }
+
+
     // Trigger particle effect at a specific position
     private func triggerSquareBreakParticles(at position: SCNVector3) {
         guard let particleSystem = squareBreakParticleSystem?.copy() as? SCNParticleSystem else { 
