@@ -118,6 +118,7 @@ class GameViewController: UIViewController {
     // Pause for effect in (at least) square breaker
     private let ROTATION_COMPLETION_DELAY = 0.5
     
+    private let AUTO_ROTATIONS = 7
     
     // 2D array to store rotation states for each cylinder
     var rotationStates: [[Int]] = []
@@ -191,8 +192,8 @@ class GameViewController: UIViewController {
     ]
     
     // Partikles
-    private var squareBreakParticleSystem: SCNParticleSystem?
-    private var flowerParticleSystem: SCNParticleSystem?
+    private var squareBreakParticleSystem: SCNNode?
+    private var flowerParticleSystem: SCNNode?
     
     // Banner manager
     private var bannerManager: BannerManager!
@@ -329,7 +330,7 @@ class GameViewController: UIViewController {
         let ambientLightNode = SCNNode()
         ambientLightNode.light = SCNLight()
         ambientLightNode.light!.type = .ambient
-        ambientLightNode.light!.intensity = 10
+        ambientLightNode.light!.intensity = 1
         ambientLightNode.light!.color = UIColor.white
         scene.rootNode.addChildNode(ambientLightNode)
 
@@ -721,6 +722,11 @@ class GameViewController: UIViewController {
                 print("onRotationComplete was called with a wildCard that has rotated?")
             }
             let neighbors = findConnectedNeighbors(row: cell.row, col: cell.col)
+
+            if wildCardActive && wildCardCell != nil {
+                let wildCardNeighbors = findConnectedNeighbors(row: wildCardCell!.row, col: wildCardCell!.col)
+                newNeighborsToRotate.append(contentsOf: wildCardNeighbors)
+            }
 
             if neighbors.count > 0 {
                 newNeighborsToRotate.append(cell)
@@ -1396,7 +1402,6 @@ class GameViewController: UIViewController {
             return
         }
         
-        guard let cylinderNode = findCylinderNode(at: pipe.row, col: pipe.col) else { return }
         animateColorChange(for: pipe, to: CYLINDER_COLOR, duration: 0.2)
         animateCellYPosition(for: pipe, towardCamera: false, duration: 0.3)
     }
@@ -2070,16 +2075,26 @@ class GameViewController: UIViewController {
     private func setupFlowerParticleSystem() {
         let particleSystem = SCNParticleSystem()
         
-        // Particle appearance - make particles larger and more visible
-        particleSystem.particleSize = 0.1  // Larger particles
-        particleSystem.particleColor = UIColor(red: 0.1, green: 0, blue: 0, alpha: 0)
+        particleSystem.particleSize = 0.15
         particleSystem.particleImage = UIImage(named: "circle_05.png")
-        
+        //particleSystem.particleColor = UIColor(red: 0.9, green: 1.0, blue: 0.9, alpha: 1.0)
+
         particleSystem.particleAngularVelocity = 100.0
         particleSystem.particleAngleVariation = 200.0
         
         // Color variation for tinted particles
-        //particleSystem.particleColorVariation = SCNVector4(0.3, 0.3, 0.0, 0.2)
+        particleSystem.particleColorVariation = SCNVector4(0.1, 0.1, 0.1, 0.0)
+        
+        // Add opacity fade out over particle lifetime
+        let colorController = SCNParticlePropertyController()
+        let colorSequence = CAKeyframeAnimation(keyPath: "contents")
+        colorSequence.values = [
+            UIColor(red: 0.9, green: 1.0, blue: 0.9, alpha: 1.0),
+            UIColor(red: 0.9, green: 0.0, blue: 0.0, alpha: 0.0)
+        ]
+        colorSequence.keyTimes = [0.0, 1.0]
+        colorController.animation = colorSequence
+        particleSystem.propertyControllers = [.color: colorController]
         
         particleSystem.emitterShape = SCNBox(
             width: CGFloat(CYLINDER_RADIUS) * 4.0,
@@ -2091,26 +2106,23 @@ class GameViewController: UIViewController {
         //particleSystem.birthDirection = .random
 
         // Particle behavior
-        particleSystem.particleVelocity = 0.4
+        particleSystem.particleVelocity = 0.6
         particleSystem.particleVelocityVariation = 0.1
         particleSystem.particleLifeSpan = 1.2
         particleSystem.particleLifeSpanVariation = 0.1
-        particleSystem.emissionDuration = 0.1
-        //particleSystem.spreadingAngle = 90.0  // Wider spread
-        //particleSystem.acceleration = SCNVector3(0, -2.0, 0) // Lighter gravity
+        particleSystem.emissionDuration = 0.01
+        particleSystem.acceleration = SCNVector3(0, -1.0, 0)
+
         particleSystem.blendMode = .additive
-        //particleSystem.sortingMode = .projectedDepth
-        
+
         // Emission properties - use volume instead of surface
-        particleSystem.birthRate = 100
+        particleSystem.birthRate = 10
         particleSystem.birthLocation = .volume
-        //particleSystem.birthDirection = .random
-        
-        // Size variation over time
         particleSystem.particleSizeVariation = 0.1
-        
-        // Store the particle system
-        flowerParticleSystem = particleSystem
+
+        let node = SCNNode()
+        node.addParticleSystem(particleSystem)
+        flowerParticleSystem = node
     }
 
     // Create grass-green ground plane using flattened sphere
@@ -2149,16 +2161,25 @@ class GameViewController: UIViewController {
     private func setupSquareBreakParticleSystem() {
         let particleSystem = SCNParticleSystem()
         
-        // Particle appearance - make particles larger and more visible
-        particleSystem.particleSize = 0.1  // Larger particles
-        particleSystem.particleColor = UIColor(red: 0.1, green: 0, blue: 0, alpha: 0)
+        particleSystem.particleSize = 0.2
         particleSystem.particleImage = UIImage(named: "star_07.png")
-        
+        //particleSystem.particleColor = UIColor(red: 0.8, green: 0.8, blue: 1.0, alpha: 1.0)
+
         particleSystem.particleAngularVelocity = 100.0
         particleSystem.particleAngleVariation = 200.0
         
-        // Color variation for tinted particles
-        //particleSystem.particleColorVariation = SCNVector4(0.3, 0.3, 0.0, 0.2)
+        particleSystem.particleColorVariation = SCNVector4(0.1, 0.1, 0.1, 0.0)
+        
+        // Add opacity fade out over particle lifetime
+        let colorController = SCNParticlePropertyController()
+        let colorSequence = CAKeyframeAnimation(keyPath: "contents")
+        colorSequence.values = [
+            UIColor(red: 0.8, green: 0.8, blue: 1.0, alpha: 1.0),
+            UIColor(red: 0.8, green: 0.8, blue: 1.0, alpha: 0.0)
+        ]
+        colorSequence.keyTimes = [0.0, 1.0]
+        colorController.animation = colorSequence
+        particleSystem.propertyControllers = [.color: colorController]
         
         particleSystem.emitterShape = SCNBox(
             width: CGFloat(CYLINDER_RADIUS),
@@ -2170,26 +2191,27 @@ class GameViewController: UIViewController {
         //particleSystem.birthDirection = .random
 
         // Particle behavior
-        particleSystem.particleVelocity = 0.4
+        particleSystem.particleVelocity = 0.6
         particleSystem.particleVelocityVariation = 0.1
         particleSystem.particleLifeSpan = 1.2
         particleSystem.particleLifeSpanVariation = 0.1
         particleSystem.emissionDuration = 0.1
-        //particleSystem.spreadingAngle = 90.0  // Wider spread
-        //particleSystem.acceleration = SCNVector3(0, -2.0, 0) // Lighter gravity
+        particleSystem.acceleration = SCNVector3(0, -1.0, 0)
+
         particleSystem.blendMode = .additive
         //particleSystem.sortingMode = .projectedDepth
         
         // Emission properties - use volume instead of surface
-        particleSystem.birthRate = 100
+        particleSystem.birthRate = 60
         particleSystem.birthLocation = .volume
         //particleSystem.birthDirection = .random
         
         // Size variation over time
         particleSystem.particleSizeVariation = 0.1
         
-        // Store the particle system
-        squareBreakParticleSystem = particleSystem
+        let node = SCNNode()
+        node.addParticleSystem(particleSystem)
+        squareBreakParticleSystem = node
     }
 
     // Add debug particle system at center of screen
@@ -2282,7 +2304,7 @@ class GameViewController: UIViewController {
         
         // Set wild card as active
         wildCardActive = true
-        wildCardAutoRotationsRemaining = 5
+        wildCardAutoRotationsRemaining = AUTO_ROTATIONS
         
         animateColorChange(for: wildCardCell!, to: WILD_CARD_ACTIVE_COLOR, duration: 0.3)
         
@@ -2398,44 +2420,32 @@ class GameViewController: UIViewController {
     
 
     private func triggerFlowerParticles(at position: SCNVector3) {
-        guard let particleSystem = flowerParticleSystem?.copy() as? SCNParticleSystem else { 
+        guard let particleSystem = flowerParticleSystem?.clone() else {
             print("Failed to copy particle system")
             return
         }
-
-        // Create a node to hold the particle system
-        let particleNode = SCNNode()
-        particleNode.position = position
         
-        // Add the particle system to the node
-        particleNode.addParticleSystem(particleSystem)
-        
-        // Add to scene
-        scene.rootNode.addChildNode(particleNode)
+        particleSystem.position = position
+        scene.rootNode.addChildNode(particleSystem)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            particleNode.removeFromParentNode()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            particleSystem.removeFromParentNode()
         }
     }
 
 
     // Trigger particle effect at a specific position
     private func triggerSquareBreakParticles(at position: SCNVector3) {
-        guard let particleSystem = squareBreakParticleSystem?.copy() as? SCNParticleSystem else { 
+        guard let particleSystem = squareBreakParticleSystem?.clone() else {
             print("Failed to copy particle system")
             return 
         }
         
-        // Create a node to hold the particle system
-        let particleNode = SCNNode()
-        particleNode.position = position
-        
-        particleNode.addParticleSystem(particleSystem)
-        scene.rootNode.addChildNode(particleNode)
-        
-        // Remove the particle node after the effect is complete
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            particleNode.removeFromParentNode()
+        particleSystem.position = position
+        scene.rootNode.addChildNode(particleSystem)
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            particleSystem.removeFromParentNode()
         }
     }
 }
