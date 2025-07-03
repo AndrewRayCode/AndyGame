@@ -103,8 +103,9 @@ class GameViewController: UIViewController {
     private let SQUARE_DISABLED_COLOR = UIColor(red: 0.5, green: 0.5, blue: 0.7, alpha: 1.0)
     
     private let PIPE_ROTATING_COLOR = UIColor(red: 1.0, green: 0.1, blue: 0.2, alpha: 1.0)
-    //private let WILD_CARD_COLOR = UIColor(red: 0.8, green: 0.2, blue: 0.8, alpha: 1.0)
-    private let WILD_CARD_COLOR = UIColor(red: 1.0, green: 1.0, blue: 0.0, alpha: 1.0)
+    
+    private let WILD_CARD_AVAIABLE_COLOR = UIColor(red: 1.0, green: 0.0, blue: 1.0, alpha: 1.0)
+    private let WILD_CARD_ACTIVE_COLOR = UIColor(red: 1.0, green: 1.0, blue: 0.0, alpha: 1.0)
 
     private let SQUARE_CLICK_MIN_WAIT = 1.0
     private let SQUARE_CLICK_MAX_WAIT = 2.0
@@ -240,6 +241,9 @@ class GameViewController: UIViewController {
         // create a new scene
         scene = SCNScene()
         
+        // Create grass-green ground plane using flattened sphere
+        createGrassGround()
+        
         // Setup particle system for square breaking
         setupSquareBreakParticleSystem()
         setupFlowerParticleSystem()
@@ -290,13 +294,35 @@ class GameViewController: UIViewController {
         // Scale the grid to fit the screen
         updateGridScale()
         
-        // create and add a light to the scene - brighter and closer
+        // create and add a spotlight to the scene
         let lightNode = SCNNode()
-        lightNode.light = SCNLight()
-        lightNode.light!.type = .omni
-        lightNode.light!.intensity = 200
-        lightNode.position = SCNVector3(x: 0, y: 10, z: 0)
-        lightNode.castsShadow = true
+        lightNode.position = SCNVector3(x: 0, y: 7, z: 1)
+        lightNode.eulerAngles = SCNVector3(x: -Float.pi/2, y: 0, z: 0)
+
+        let light = SCNLight()
+        lightNode.light = light
+
+        light.type = .spot
+        light.intensity = 100
+        light.castsShadow = true
+//        light.showLightExtents = true
+        
+        // Configure spotlight properties
+        light.spotInnerAngle = 30.0
+        light.spotOuterAngle = 90.0
+        light.attenuationStartDistance = 5.0
+        light.attenuationEndDistance = 20.0
+        
+        // Configure shadow properties for better shadow casting
+//        light.shadowMode = .deferred
+//        light.shadowRadius = 3.0
+//        light.shadowSampleCount = 8
+//        light.shadowBias = 0.005
+//        light.shadowMapSize = CGSize(width: 2048, height: 2048)
+//        
+        // Configure shadow casting and receiving
+//        light.categoryBitMask = 1
+        
         scene.rootNode.addChildNode(lightNode)
         
         // create and add an ambient light to the scene - brighter
@@ -340,6 +366,7 @@ class GameViewController: UIViewController {
                 // Create cylinder node
                 let cylinderNode = SCNNode(geometry: cylinderGeometry)
                 cylinderNode.castsShadow = true
+                cylinderNode.categoryBitMask = 1
                 
                 // Position cylinders in a grid
                 // Center the grid around origin
@@ -375,22 +402,26 @@ class GameViewController: UIViewController {
                 cylinderNode.addChildNode(childPipe)
             }
         }
-
+        
         // set the scene to the view
         scnView.scene = scene
+        //scnView.debugOptions = [.showLightExtents]
         
         // allows the user to manipulate the camera
-        scnView.allowsCameraControl = false
+        scnView.allowsCameraControl = true
         
         // show statistics such as fps and timing information
         scnView.showsStatistics = true
         
         // configure the view
-        scnView.backgroundColor = UIColor.black
+        scnView.backgroundColor = UIColor.white
         
-        // Enable transparency for particle effects
+        // Enable shadow rendering
+        scnView.autoenablesDefaultLighting = false
         scnView.isJitteringEnabled = true
         scnView.antialiasingMode = .multisampling4X
+        
+        // Enable transparency for particle effects
         
         // add a tap gesture recognizer
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
@@ -459,7 +490,7 @@ class GameViewController: UIViewController {
             }
             
             // Check if this is a wild card cell click during spinning
-            if wildCardSpinning && wildCardCell == position && !wildCardActive {
+            if wildCardCell == position && !wildCardActive {
                 // Handle wild card activation
                 handleWildCardActivation(position)
                 return
@@ -507,6 +538,17 @@ class GameViewController: UIViewController {
     // On subsequent rotation completions, this function is called with the
     // *finished* rotations   
     private func rotateCells(_ cells: [CellPosition], _ squareCellsToExpand: [[CellPosition]] = []) {
+        
+        // Build a list of cells that are actively doing something, so that creating
+        // new things on this frame like a flower don't overlap with these cells
+        var activeCellsThisFrame = cells.map { $0 }
+        activeCellsThisFrame.append(contentsOf: clickableSquarePipes)
+        activeCellsThisFrame.append(contentsOf: expiredSquares)
+        activeCellsThisFrame.append(contentsOf: clickableFlowerCells)
+        if wildCardCell != nil {
+            activeCellsThisFrame.append(wildCardCell!)
+        }
+        
         // Set rotating flag to prevent other taps
         isRotating = true
         updateResetButtonState()
@@ -515,7 +557,9 @@ class GameViewController: UIViewController {
         squaresCreatedThisFrame.removeAll()
         flowersCreatedThisFrame.removeAll()
         
+        // Create clickable squares if any
         detectPipeSquares()
+        activeCellsThisFrame.append(contentsOf: squareCellsToExpand.flatMap { $0 })
         
         // Track squares that contain starter cells (cells that initiated this rotation)
         trackSquaresWithStarterCells(cells)
@@ -525,19 +569,22 @@ class GameViewController: UIViewController {
             startSquarePipeInteraction()
         }
         
-        // 1 in 10 chance to trigger flower formation
-       if Int.random(in: 1...10) == 1 {
-           triggerFlowerFormation()
-       }
-        
-        if wildCardCell == nil {
-        //if wildCardCell == nil && Int.random(in: 1...10) > 5 {
-            print("new wildcard spin")
-            triggerWildCardSpinning()
+        // Randomly trigger flower formation
+        if Int.random(in: 1...10) == 1 {
+            let flowers = triggerFlowerFormation(cellsToExclude: activeCellsThisFrame)
+            activeCellsThisFrame.append(contentsOf: flowers)
         }
-        
-        // Handle active wild card auto-rotation
-        handleActiveWildCardAutoRotation()
+
+        // Randomly trigger auto rotator ("wildcard") formation
+        if wildCardCell == nil && Int.random(in: 1...10) == 1 {
+            let wildCard = triggerWildCardSpinning(cellsToExclude: activeCellsThisFrame)
+            if wildCard != nil {
+                activeCellsThisFrame.append(wildCard!)
+            }
+        } else {
+            // Handle active wild card auto-rotation
+            handleActiveWildCardAutoRotation()
+        }
         
         // Pop open the square
         for square in squareCellsToExpand {
@@ -566,24 +613,24 @@ class GameViewController: UIViewController {
         // Remove cells that are part of squareCellsToExpand from the cells array
         let cellsInSquares = squareCellsToExpand.flatMap { $0 }
         let squareCells = Set(cellsInSquares)
-        let filteredCells = cells.filter { !squareCells.contains($0) }
+        let rotatingCellsExcludingOpenedSquares = cells.filter { !squareCells.contains($0) }
         
         // Edge case: When all rotating cells are part of squares, the square
         // has popped open, but there will be nothing left in cells to animate.
         // So manually fire the next step
-        if filteredCells.count == 0 && squareCells.count > 0 {
+        if rotatingCellsExcludingOpenedSquares.count == 0 && squareCells.count > 0 {
             currentRotatingCells = cellsInSquares
             DispatchQueue.main.asyncAfter(deadline: .now() + ROTATION_TIME) {
                 self.onRotationComplete(rotatedCells: cellsInSquares)
             }
         } else {
             animationCompletionCount = 0
-            totalAnimationsInBatch = filteredCells.count
+            totalAnimationsInBatch = rotatingCellsExcludingOpenedSquares.count
             currentRotatingCells = cells
             
             // Process each cell in the filtered array
             // get cell and for loop index
-            for cell in filteredCells {
+            for cell in rotatingCellsExcludingOpenedSquares {
                 // Update rotation state (unbounded)
                 rotationStates[cell.row][cell.col] -= 1
                 
@@ -640,7 +687,7 @@ class GameViewController: UIViewController {
             
             // Skip if this neighbor is the wild card cell that's currently spinning
             let neighborCell = CellPosition(row: ny, col: nx)
-            if wildCardCell == neighborCell && wildCardSpinning {
+            if wildCardCell == neighborCell {
                 continue
             }
             
@@ -670,6 +717,9 @@ class GameViewController: UIViewController {
         var newNeighborsToRotate: [CellPosition] = []
         // Find connected neighbors for each rotated cell
         for cell in rotatedCells {
+            if cell == wildCardCell {
+                print("onRotationComplete was called with a wildCard that has rotated?")
+            }
             let neighbors = findConnectedNeighbors(row: cell.row, col: cell.col)
 
             if neighbors.count > 0 {
@@ -711,6 +761,16 @@ class GameViewController: UIViewController {
             DispatchQueue.main.asyncAfter(deadline: .now() + (shouldDelayNextRotation ? ROTATION_COMPLETION_DELAY : 0)) {
                 self.shouldDelayNextRotation = false
                 self.setCellsToHasRotatedColor(cells: cellsToReset)
+                for cell in uniqueNeighbors {
+                    if cell == self.wildCardCell {
+                        print("Found a wildCardCell in uniqueNeighbors")
+                    }
+                }
+                for cell in flowerCellsForRotation {
+                    if cell == self.wildCardCell {
+                        print("Found a wildCardCell in flower")
+                    }
+                }
                 self.rotateCells(allCellsToRotate, newSquares)
             }
         } else {
@@ -841,13 +901,6 @@ class GameViewController: UIViewController {
         cancelWildCardSpinning()
         
         resetCurrentScore()
-    }
-
-    @objc private func testFlowerFormation() {
-        guard !isRotating else { return }
-        
-        // Manually trigger flower formation for testing
-        triggerFlowerFormation()
     }
 
     // Animate a pipe rotation with spring physics
@@ -1185,7 +1238,7 @@ class GameViewController: UIViewController {
     
     // Check if a 2x2 area forms the specific square pattern
     private func isSquarePattern(at row: Int, col: Int) -> Bool {
-        // Check if any cell in this 2x2 area is part of an active flower
+        // Check if any cell in this 2x2 area is part of an active flower or wild card
         let squareCells = [
             CellPosition(row: row, col: col),
             CellPosition(row: row, col: col + 1),
@@ -1193,9 +1246,9 @@ class GameViewController: UIViewController {
             CellPosition(row: row + 1, col: col + 1)
         ]
         
-        // If any cell is part of an active flower, don't form a square
+        // If any cell is part of an active flower or wild card, don't form a square
         for cell in squareCells {
-            if clickableFlowerCells.contains(cell) {
+            if clickableFlowerCells.contains(cell) || cell == wildCardCell {
                 return false
             }
         }
@@ -1718,22 +1771,22 @@ class GameViewController: UIViewController {
     }
 
     // Trigger flower formation in a random 4x4 area
-    private func triggerFlowerFormation() {
+    private func triggerFlowerFormation(cellsToExclude: [CellPosition]) -> Set<CellPosition> {
         // Only allow one flower at a time
-        guard activeFlower == nil else { return }
+        guard activeFlower == nil else { return Set() }
         
         // Find a 4x4 area that doesn't contain any rotating cells
-        guard let flowerArea = findFree4x4Area() else { return }
+        guard let flowerArea = findFree4x4Area(cellsToExclude: cellsToExclude) else { return Set() }
         
         // Check for overlap with squares created this frame
         let flowerCells = getFlowerCells(for: flowerArea)
-        let hasSquareOverlap = flowerCells.contains { cell in
-            squaresCreatedThisFrame.contains(cell)
-        }
+        // let hasSquareOverlap = flowerCells.contains { cell in
+        //     cellsToExclude.contains(cell)
+        // }
         
-        if hasSquareOverlap {
-            return // Don't form flower if it overlaps with squares created this frame
-        }
+        // if hasSquareOverlap {
+        //     return Set()
+        // }
         
         // Store previous rotations for the flower area
         let previousRotations = getPreviousRotations(for: flowerArea)
@@ -1748,15 +1801,17 @@ class GameViewController: UIViewController {
         
         // Make flower cells clickable and start timer
         activateFlowerInteraction(area: flowerArea, previousRotations: previousRotations)
+
+        return flowersCreatedThisFrame
     }
     
     // Find a 4x4 area that doesn't contain any rotating cells
-    private func findFree4x4Area() -> (startRow: Int, startCol: Int)? {
+    private func findFree4x4Area(cellsToExclude: [CellPosition]) -> (startRow: Int, startCol: Int)? {
         // Check each possible 4x4 area on the board
         for startRow in 0..<(GRID_ROWS - 3) {
             for startCol in 0..<(GRID_COLS - 3) {
                 // Check if this 4x4 area is free of rotating cells
-                let isFree = check4x4AreaFree(startRow: startRow, startCol: startCol)
+                let isFree = check4x4AreaFree(startRow: startRow, startCol: startCol, cellsToExclude: cellsToExclude)
                 if isFree {
                     return (startRow, startCol)
                 }
@@ -1766,28 +1821,13 @@ class GameViewController: UIViewController {
     }
     
     // Check if a 4x4 area is free of rotating cells
-    private func check4x4AreaFree(startRow: Int, startCol: Int) -> Bool {
+    private func check4x4AreaFree(startRow: Int, startCol: Int, cellsToExclude: [CellPosition]) -> Bool {
         for row in startRow..<(startRow + 4) {
             for col in startCol..<(startCol + 4) {
                 let cell = CellPosition(row: row, col: col)
                 
                 // Check if cell is rotating
-                if currentRotatingCells.contains(cell) {
-                    return false
-                }
-                
-                // Check if cell is part of an active (green) square
-                if clickableSquarePipes.contains(cell) {
-                    return false
-                }
-                
-                // Check if cell is part of a deactivated (gray) square
-                if expiredSquares.contains(cell) {
-                    return false
-                }
-                
-                // Check if cell is part of an active flower
-                if clickableFlowerCells.contains(cell) {
+                if cellsToExclude.contains(cell) {
                     return false
                 }
                 
@@ -1800,7 +1840,7 @@ class GameViewController: UIViewController {
                     if adjacentRow >= 0 && adjacentRow < GRID_ROWS && 
                        adjacentCol >= 0 && adjacentCol < GRID_COLS {
                         let adjacentCell = CellPosition(row: adjacentRow, col: adjacentCol)
-                        if currentRotatingCells.contains(adjacentCell) {
+                        if cellsToExclude.contains(adjacentCell) {
                             return false
                         }
                     }
@@ -2073,6 +2113,38 @@ class GameViewController: UIViewController {
         flowerParticleSystem = particleSystem
     }
 
+    // Create grass-green ground plane using flattened sphere
+    private func createGrassGround() {
+        // Create a sphere geometry that will be flattened
+        let sphereGeometry = SCNSphere(radius: 8.0) // Large radius for ground coverage
+        
+        // Create grass-green material with flat shading
+        let grassMaterial = SCNMaterial()
+        grassMaterial.diffuse.contents = UIColor(red: 0.2, green: 0.6, blue: 0.2, alpha: 1.0) // Grass green
+        grassMaterial.specular.contents = UIColor.black // No specular highlights for flat look
+        grassMaterial.lightingModel = .physicallyBased
+        grassMaterial.isDoubleSided = true
+        grassMaterial.roughness.contents = 0.5
+        
+        sphereGeometry.materials = [grassMaterial]
+        
+        // Create the ground node
+        let groundNode = SCNNode(geometry: sphereGeometry)
+        
+        // Flatten the sphere in the Y direction to create a ground plane effect
+        groundNode.scale = SCNVector3(x: 1.0, y: 0.1, z: 1.0) // Flatten by 90%
+        
+        // Position the ground below the pipes
+        groundNode.position = SCNVector3(x: 0, y: -0.8, z: 0) // Slightly below pipe level
+        
+        // Enable shadow receiving on the ground
+//        groundNode.castsShadow = false
+//        groundNode.collisionBitMask = 1
+        
+        // Add to scene
+        scene.rootNode.addChildNode(groundNode)
+    }
+    
     // Setup particle system for square breaking effects
     private func setupSquareBreakParticleSystem() {
         let particleSystem = SCNParticleSystem()
@@ -2140,30 +2212,27 @@ class GameViewController: UIViewController {
     
     
     // Wild card spinning cell function
-    private func triggerWildCardSpinning() {
+    private func triggerWildCardSpinning(cellsToExclude: [CellPosition]) -> CellPosition? {
         // Find a random cell that's not currently rotating, not on edges, not expired, and not in flowers
         var availableCells: [CellPosition] = []
         for row in 1..<GRID_ROWS-1 {
             for col in 1..<GRID_COLS-1 {
                 let cell = CellPosition(row: row, col: col)
                 // Check if cell is not in current rotating cells, not expired, and not in flowers
-                if !currentRotatingCells.contains(cell) && 
-                   !expiredSquares.contains(cell) && 
-                   !clickableFlowerCells.contains(cell) {
+                if !cellsToExclude.contains(cell) {
                     availableCells.append(cell)
                 }
             }
         }
         
-        guard !availableCells.isEmpty else { return }
+        guard !availableCells.isEmpty else { return nil }
         
         // Select random cell
         let selectedCell = availableCells.randomElement()!
         wildCardCell = selectedCell
         wildCardSpinning = true
         
-        // Animate color change to purple and lift up
-        animateColorChange(for: selectedCell, to: WILD_CARD_COLOR, duration: 0.3)
+        animateColorChange(for: selectedCell, to: WILD_CARD_AVAIABLE_COLOR, duration: 0.3)
         animateCellYPosition(for: selectedCell, towardCamera: true, duration: 0.3)
         
         // Start spinning animation (3 full rotations = 12 quarter turns)
@@ -2175,7 +2244,6 @@ class GameViewController: UIViewController {
         SCNTransaction.animationDuration = spinDuration
         SCNTransaction.animationTimingFunction = CAMediaTimingFunction(name: .linear)
         
-        // Add 12 quarter turns to the rotation state
         rotationStates[selectedCell.row][selectedCell.col] += totalRotations
         
         // Get the cylinder node and animate its rotation
@@ -2185,6 +2253,8 @@ class GameViewController: UIViewController {
         }
         
         SCNTransaction.commit()
+
+        animateCellYPosition(for: selectedCell, towardCamera: true, duration: 0.3)
         
         // Return to normal state after spinning
         let timer = DispatchWorkItem {
@@ -2192,6 +2262,8 @@ class GameViewController: UIViewController {
         }
         wildCardSpinningTimer = timer
         DispatchQueue.main.asyncAfter(deadline: .now() + spinDuration, execute: timer)
+
+        return selectedCell
     }
     
         // Handle wild card activation when clicked during spinning
@@ -2210,15 +2282,16 @@ class GameViewController: UIViewController {
         
         // Set wild card as active
         wildCardActive = true
-        wildCardAutoRotationsRemaining = 10
+        wildCardAutoRotationsRemaining = 5
+        
+        animateColorChange(for: wildCardCell!, to: WILD_CARD_ACTIVE_COLOR, duration: 0.3)
         
         // Return to normal position but keep purple color
-        //animateCellYPosition(for: cell, towardCamera: false, duration: 0.3)
+        animateCellYPosition(for: cell, towardCamera: false, duration: 0.3)
         
         // Stop the spinning timer
         wildCardSpinning = false
-        
-        print("---- starting rotation")
+
         bannerManager.showBanner(message: "Auto rotator!")
     }
     
@@ -2244,9 +2317,7 @@ class GameViewController: UIViewController {
     // Handle active wild card auto-rotation
     private func handleActiveWildCardAutoRotation() {
         guard wildCardActive, let cell = wildCardCell, wildCardAutoRotationsRemaining > 0 else { return }
-        
-        print("rotate fun \(wildCardAutoRotationsRemaining)")
-        
+
         // Decrement remaining rotations
         wildCardAutoRotationsRemaining -= 1
         
